@@ -92,23 +92,26 @@ export async function POST(req: Request) {
       console.log('✅ 面接ログ保存OK！データ:', data);
     }
 
-    // --- 【口】 ---
-    console.log('👄 音声合成スタート...');
-    const mp3Response = await openai.audio.speech.create({
-      model: 'tts-1',
-      voice: 'alloy',
-      input: aiText,
-    });
-    const mp3Buffer = Buffer.from(await mp3Response.arrayBuffer());
+// --- 【口】 ---
+console.log("👄 音声合成スタート...");
+const mp3Response = await openai.audio.speech.create({
+  model: "tts-1",
+  voice: "alloy",
+  input: aiText,
+});
 
-    return new NextResponse(mp3Buffer, {
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'x-ai-text': encodeURIComponent(aiText),
-      },
-    });
-  } catch (error: any) {
-    console.error('💥 致命的なエラー:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+// 【修正点】BufferというNode.js専用の形ではなく、世界標準のArrayBufferのまま渡します
+const audioData = await mp3Response.arrayBuffer();
+
+return new NextResponse(audioData, {
+  headers: { 
+    'Content-Type': 'audio/mpeg', 
+    'x-ai-text': encodeURIComponent(aiText) 
+  },
+});
+
+} catch (error: any) {
+console.error("💥 致命的なエラー:", error);
+return NextResponse.json({ error: error.message }, { status: 500 });
+}
 }
