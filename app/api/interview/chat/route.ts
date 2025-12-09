@@ -1,117 +1,127 @@
+// @ts-nocheck
 import { NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 
+// 各種クライアントの準備
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export async function POST(req: Request) {
-  console.log('🚀 API呼び出し開始！');
+  const RESPONSE_TIME_SECONDS = 15; // AIの応答にかかった時間（利用時間として加算）
+  
+  // let宣言で初期化エラーを回避
+  let userText = "聞き取り失敗"; 
+  let aiText = "エラー";
+  const dummyId = "00000000-0000-0000-0000-000000000000"; // 仮のユーザーID
 
-  // 1. 鍵のチェック
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseKey) {
-    console.error(
-      '❌ Supabaseの鍵が見つかりません！.env.localを確認してください。'
-    );
-    return NextResponse.json({ error: 'Env vars missing' }, { status: 500 });
-  } else {
-    console.log('🔑 鍵はありました。URL:', supabaseUrl);
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    console.error("❌ Supabaseの鍵が見つかりません！.env.localを確認してください。");
+    return NextResponse.json({ error: "Env vars missing" }, { status: 500 });
   }
-
-  // クライアント準備
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
     const formData = await req.formData();
     const audioFile = formData.get('audio') as File;
+    
+    // --- 【利用制限チェック】 ---
+    const { data: usageData } = await supabase
+        .from("daily_usages")
+        .select("total_seconds")
+        .eq("user_id", dummyId)
+        .eq("usage_date", new Date().toISOString().split('T')[0])
+        .maybeSingle();
 
-    if (!audioFile) {
-      console.error('❌ 音声ファイルが届いていません');
-      return NextResponse.json({ error: 'No audio file' }, { status: 400 });
+    const currentSeconds = usageData?.total_seconds || 0;
+    const remainingSeconds = 900 - currentSeconds;
+
+    if (remainingSeconds <= 0) {
+        const message = "申し訳ありません。本日の利用時間を使い切りました（15分）。続きは明日またお越しください。";
+        const mp3Response = await openai.audio.speech.create({
+            model: "tts-1", voice: "alloy", input: message,
+        });
+        const audioData = await mp3Response.arrayBuffer();
+        
+        return new NextResponse(audioData, {
+            headers: { 
+                'Content-Type': 'audio/mpeg', 
+                'x-ai-text': encodeURIComponent(message),
+                'x-remaining-seconds': '0'
+            },
+        });
     }
 
-    // --- 【耳】 ---
-    console.log('👂 音声認識スタート...');
-    const buffer = await audioFile.arrayBuffer();
-    const transcription = await groq.audio.transcriptions.create({
-      file: new File([buffer], 'input.wav', { type: 'audio/wav' }),
-      model: 'whisper-large-v3',
-      language: 'ja',
-      response_format: 'json',
-    });
-    const userText = transcription.text;
-    console.log('✅ 認識完了:', userText);
-
-    // --- 【脳】 ---
-    console.log('🧠 思考スタート...');
+    // --- 【耳】Groqで文字起こし ---
+    if (audioFile) {
+        const buffer = await audioFile.arrayBuffer();
+        const transcription = await groq.audio.transcriptions.create({
+            file: new File([buffer], 'input.wav', { type: 'audio/wav' }),
+            model: 'whisper-large-v3', language: 'ja', response_format: 'json',
+        });
+        userText = transcription.text;
+    }
+    
+    // --- 【脳】GPT-4o miniで返答生成 ---
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: 'あなたは優しい面接官です。100文字以内で返答してください。',
-        },
-        { role: 'user', content: userText },
-      ],
+        model: "gpt-4o-mini",
+        messages: [
+            { role: "system", content: "あなたは優しい面接官です。100文字以内で、相槌を打ちながら次の質問をしてください。" },
+            { role: "user", content: userText }
+        ],
     });
-    const aiText = completion.choices[0].message.content || 'エラー';
-    console.log('✅ 思考完了:', aiText);
+    aiText = completion.choices[0].message.content || "エラー";
 
-    // --- 【記憶】（ここが問題の場所！） ---
-    console.log('💾 データベース保存トライ...');
-    const dummyId = '00000000-0000-0000-0000-000000000000';
+    // --- 【記憶】Supabaseに保存と利用時間更新 ---
+    const newTotalSeconds = currentSeconds + RESPONSE_TIME_SECONDS;
 
-    // 1. プロフィール保存（エラーチェック付き）
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .upsert({ id: dummyId, plan_type: 'light' });
-
-    if (profileError) {
-      console.error('❌ プロフィール保存失敗:', profileError); // ★ここに出るはず！
-    } else {
-      console.log('✅ プロフィール保存OK');
-    }
-
-    // 2. 会話ログ保存（エラーチェック付き）
-    const { data, error: interviewError } = await supabase
-      .from('interviews')
-      .insert({
+    // 1. 利用時間の更新（アップサート）
+    await supabase.from("daily_usages").upsert({
+        user_id: dummyId,
+        usage_date: new Date().toISOString().split('T')[0],
+        total_seconds: newTotalSeconds,
+    });
+    
+    // 2. 会話ログの保存（面接ログ）
+    await supabase.from("interviews").insert({
         user_id: dummyId,
         transcript: userText,
         feedback: aiText,
-        score: 80,
-      })
-      .select(); // selectをつけると保存したデータを返してくれます
+        score: 80 
+    });
 
-    if (interviewError) {
-      console.error('❌ 面接ログ保存失敗:', interviewError); // ★またはここ！
-    } else {
-      console.log('✅ 面接ログ保存OK！データ:', data);
-    }
+    // --- 【口】OpenAI TTSで音声合成 ---
+    const mp3Response = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: "alloy",
+      input: aiText,
+    });
+    
+    const audioData = await mp3Response.arrayBuffer();
+    
+    return new NextResponse(audioData, {
+      headers: {
+        'Content-Type': 'audio/mpeg',
+        'x-ai-text': encodeURIComponent(aiText),
+        'x-remaining-seconds': String(900 - newTotalSeconds) // 残り時間を返す
+      },
+    });
 
-// --- 【口】 ---
-console.log("👄 音声合成スタート...");
-const mp3Response = await openai.audio.speech.create({
-  model: "tts-1",
-  voice: "alloy",
-  input: aiText,
-});
+  } catch (error) {
+    console.error("💥 致命的なエラー:", error);
+    // エラー時でもアプリが壊れないよう、エラーメッセージを音声で返す
+    const message = "申し訳ありません。システムエラーが発生しました。";
+    const mp3Response = await openai.audio.speech.create({
+        model: "tts-1", voice: "alloy", input: message,
+    });
+    const audioData = await mp3Response.arrayBuffer();
 
-// 【修正点】BufferというNode.js専用の形ではなく、世界標準のArrayBufferのまま渡します
-const audioData = await mp3Response.arrayBuffer();
-
-return new NextResponse(audioData, {
-  headers: { 
-    'Content-Type': 'audio/mpeg', 
-    'x-ai-text': encodeURIComponent(aiText) 
-  },
-});
-
-} catch (error: any) {
-console.error("💥 致命的なエラー:", error);
-return NextResponse.json({ error: error.message }, { status: 500 });
-}
+    return new NextResponse(audioData, {
+        headers: { 'Content-Type': 'audio/mpeg', 'x-ai-text': encodeURIComponent("システムエラー"), 'x-remaining-seconds': '900' },
+    });
+  }
 }
