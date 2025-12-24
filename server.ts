@@ -28,14 +28,25 @@ const JUDGE_MODEL = "gemini-2.0-flash-exp";
 const genAI = new GoogleGenerativeAI(API_KEY);
 const judgeModel = genAI.getGenerativeModel({ model: JUDGE_MODEL });
 
-const SESSION_TTL_MS = 3 * 60 * 1000;
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 3 * 60 * 1000;
+const MAX_SESSION_MS = Number(process.env.MAX_SESSION_MS) || 15 * 60 * 1000;
+const MAX_SESSIONS = Number(process.env.MAX_SESSIONS) || 20;
+const MAX_RECORDING_BYTES = Number(process.env.MAX_RECORDING_BYTES) || 32 * 1024 * 1024;
+const AUDIO_WS_TOKEN = process.env.AUDIO_WS_TOKEN;
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 type Session = {
   id: string;
   geminiWs: WebSocket;
   clientWs: WebSocket | null;
   recordingBuffer: Buffer[];
+  recordingBytes: number;
   disconnectTimer: NodeJS.Timeout | null;
+  maxDurationTimer: NodeJS.Timeout | null;
+  lastClientInfo: { ip: string; origin: string; userAgent: string } | null;
   closed: boolean;
 };
 
@@ -62,8 +73,24 @@ const wss = new WebSocketServer({ port: PORT, host: "0.0.0.0" });
 console.log(`📞 面接サーバー(レーダーチャート対応)が起動しました :${PORT}`);
 
 wss.on("connection", (clientWs: WebSocket, request: IncomingMessage) => {
-  const sessionId = getSessionId(request);
+  const context = getRequestContext(request);
+  if (!isOriginAllowed(context.origin)) {
+    console.warn(`🚫 Origin blocked: ${context.origin || "unknown"}`);
+    clientWs.close(1008, "origin not allowed");
+    return;
+  }
+  if (AUDIO_WS_TOKEN && context.token !== AUDIO_WS_TOKEN) {
+    console.warn(`🚫 Unauthorized token from ${context.ip}`);
+    clientWs.close(1008, "unauthorized");
+    return;
+  }
+  const sessionId = getSessionId(context.url);
   let session = sessions.get(sessionId);
+  if (!session && sessions.size >= MAX_SESSIONS) {
+    console.warn("🚫 Max sessions reached");
+    clientWs.close(1013, "server busy");
+    return;
+  }
 
   if (!session || session.closed || session.geminiWs.readyState === WebSocket.CLOSED) {
     if (session) cleanupSession(session, "stale");
@@ -71,14 +98,31 @@ wss.on("connection", (clientWs: WebSocket, request: IncomingMessage) => {
     sessions.set(sessionId, session);
   }
 
-  attachClient(session, clientWs);
+  attachClient(session, clientWs, context);
 });
 
-function getSessionId(request: IncomingMessage) {
-  const host = request.headers.host ?? "localhost";
-  const url = new URL(request.url ?? "/", `http://${host}`);
+function getSessionId(url: URL) {
   const sid = url.searchParams.get("sid");
   return sid && sid.length > 0 ? sid : randomUUID();
+}
+
+function getRequestContext(request: IncomingMessage) {
+  const host = request.headers.host ?? "localhost";
+  const url = new URL(request.url ?? "/", `http://${host}`);
+  const origin = request.headers.origin ?? "";
+  const token = url.searchParams.get("token") ?? "";
+  const ipHeader = request.headers["x-forwarded-for"];
+  const ip = Array.isArray(ipHeader)
+    ? ipHeader[0]
+    : (ipHeader ?? request.socket.remoteAddress ?? "").toString().split(",")[0].trim();
+  const userAgent = request.headers["user-agent"] ?? "";
+
+  return { url, origin, token, ip, userAgent };
+}
+
+function isOriginAllowed(origin: string) {
+  if (ALLOWED_ORIGINS.length === 0) return true;
+  return ALLOWED_ORIGINS.includes(origin);
 }
 
 function createSession(id: string): Session {
@@ -88,11 +132,18 @@ function createSession(id: string): Session {
     geminiWs,
     clientWs: null,
     recordingBuffer: [],
+    recordingBytes: 0,
     disconnectTimer: null,
+    maxDurationTimer: null,
+    lastClientInfo: null,
     closed: false,
   };
 
   console.log(`👤 新規セッション開始: ${id}`);
+  session.maxDurationTimer = setTimeout(() => {
+    if (session.closed) return;
+    cleanupSession(session, "max-duration");
+  }, MAX_SESSION_MS);
 
   geminiWs.on("open", () => {
     geminiWs.send(JSON.stringify(initialSetupMessage));
@@ -114,7 +165,7 @@ function createSession(id: string): Session {
         if (session.clientWs?.readyState === WebSocket.OPEN) {
           session.clientWs.send(data.toString());
         }
-        session.recordingBuffer.push(Buffer.from(audioData, "base64"));
+        appendRecording(session, Buffer.from(audioData, "base64"));
       }
     } catch {}
   });
@@ -132,7 +183,7 @@ function createSession(id: string): Session {
   return session;
 }
 
-function attachClient(session: Session, clientWs: WebSocket) {
+function attachClient(session: Session, clientWs: WebSocket, context: ReturnType<typeof getRequestContext>) {
   if (session.disconnectTimer) {
     clearTimeout(session.disconnectTimer);
     session.disconnectTimer = null;
@@ -143,6 +194,12 @@ function attachClient(session: Session, clientWs: WebSocket) {
   }
 
   session.clientWs = clientWs;
+  session.lastClientInfo = {
+    ip: context.ip,
+    origin: context.origin,
+    userAgent: context.userAgent,
+  };
+  console.log(`🔌 接続: ${session.id} (ip=${context.ip || "unknown"})`);
 
   clientWs.on("message", (data: any) => {
     handleClientMessage(session, data);
@@ -150,6 +207,7 @@ function attachClient(session: Session, clientWs: WebSocket) {
 
   clientWs.on("close", () => {
     session.clientWs = null;
+    console.log(`🔌 切断: ${session.id}`);
     if (session.closed) {
       cleanupSession(session, "client-closed");
       return;
@@ -180,7 +238,7 @@ function handleClientMessage(session: Session, data: any) {
 
     if (msg.realtime_input?.media_chunks) {
       const audioData = msg.realtime_input.media_chunks[0].data;
-      session.recordingBuffer.push(Buffer.from(audioData, "base64"));
+      appendRecording(session, Buffer.from(audioData, "base64"));
       if (session.geminiWs.readyState === WebSocket.OPEN) {
         session.geminiWs.send(data);
       }
@@ -200,6 +258,16 @@ function scheduleSessionExpiry(session: Session) {
   }, SESSION_TTL_MS);
 }
 
+function appendRecording(session: Session, chunk: Buffer) {
+  session.recordingBuffer.push(chunk);
+  session.recordingBytes += chunk.length;
+  while (session.recordingBytes > MAX_RECORDING_BYTES && session.recordingBuffer.length > 0) {
+    const dropped = session.recordingBuffer.shift();
+    if (!dropped) break;
+    session.recordingBytes -= dropped.length;
+  }
+}
+
 function cleanupSession(session: Session, reason: string) {
   if (session.closed === false) {
     session.closed = true;
@@ -207,6 +275,10 @@ function cleanupSession(session: Session, reason: string) {
   if (session.disconnectTimer) {
     clearTimeout(session.disconnectTimer);
     session.disconnectTimer = null;
+  }
+  if (session.maxDurationTimer) {
+    clearTimeout(session.maxDurationTimer);
+    session.maxDurationTimer = null;
   }
   sessions.delete(session.id);
   if (session.clientWs && session.clientWs.readyState === WebSocket.OPEN) {

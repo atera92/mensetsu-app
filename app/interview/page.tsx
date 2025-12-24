@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "../../lib/supabase/client";
 
 const SERVER_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
+const WS_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN;
 
 // ★重要: ここで入出力のレートを明確に分けます
 const INPUT_SAMPLE_RATE = 16000;  // マイクは16k (AIが聞き取りやすい)
@@ -121,6 +122,10 @@ export default function InterviewPage() {
   const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const sessionIdRef = useRef<string | null>(null);
+  const pendingChunksRef = useRef<string[]>([]);
+  const pendingBytesRef = useRef(0);
+  const isFlushingRef = useRef(false);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoFinishedRef = useRef(false);
@@ -132,6 +137,8 @@ export default function InterviewPage() {
   const feedbackRef = useRef<FeedbackData | null>(null);
   const isAnalyzingRef = useRef(false);
   const MAX_RECONNECTS = 5;
+  const MAX_QUEUED_BYTES = 12 * 1024 * 1024;
+  const BUFFERED_AMOUNT_LIMIT = 2 * 1024 * 1024;
 
   useEffect(() => {
     return () => {
@@ -142,6 +149,10 @@ export default function InterviewPage() {
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
       }
       disconnectForce();
     };
@@ -258,6 +269,12 @@ export default function InterviewPage() {
     setIsReconnecting(false);
   };
 
+  const clearPendingChunks = () => {
+    pendingChunksRef.current = [];
+    pendingBytesRef.current = 0;
+    isFlushingRef.current = false;
+  };
+
   const ensureStream = async () => {
     if (streamRef.current) return streamRef.current;
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -278,6 +295,7 @@ export default function InterviewPage() {
       setIsReconnecting(false);
       setStatus("接続が切れました。再接続できませんでした");
       shouldReconnectRef.current = false;
+      clearPendingChunks();
       return;
     }
     const attempt = reconnectAttemptsRef.current + 1;
@@ -310,6 +328,7 @@ export default function InterviewPage() {
       isConnectingRef.current = false;
       setIsConnected(true);
       setIsReconnecting(false);
+      flushPendingChunks();
       if (!hasStartedRef.current) {
         setStatus("面接開始");
         startTimer(true);
@@ -376,6 +395,7 @@ export default function InterviewPage() {
         setStatus("AIが採点中..."); setIsAnalyzing(true);
         shouldReconnectRef.current = false;
         resetReconnectState();
+        clearPendingChunks();
         socketRef.current.send(JSON.stringify({ type: "FINISH_INTERVIEW" }));
         stopRecording(true);
     } else { disconnectForce(); }
@@ -389,6 +409,7 @@ export default function InterviewPage() {
     setTimeLeftSec(INTERVIEW_DURATION_SEC);
     hasStartedRef.current = false;
     sessionIdRef.current = null;
+    clearPendingChunks();
     if (socketRef.current) { socketRef.current.close(); socketRef.current = null; }
     stopRecording(true);
     setIsConnected(false);
@@ -429,16 +450,12 @@ export default function InterviewPage() {
       // 音量が出ているかログで確認
       if (vol > 0.01) console.log("Mic Input Volume:", vol);
 
-      const ws = socketRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            realtime_input: {
-              media_chunks: [{ mime_type: "audio/pcm", data: float32ToBase64(audioData) }],
-            },
-          })
-        );
-      }
+      const payload = JSON.stringify({
+        realtime_input: {
+          media_chunks: [{ mime_type: "audio/pcm", data: float32ToBase64(audioData) }],
+        },
+      });
+      sendOrQueue(payload);
     };
   };
 
@@ -464,7 +481,54 @@ export default function InterviewPage() {
     ensureSessionId();
     const url = new URL(SERVER_URL);
     url.searchParams.set("sid", sessionIdRef.current!);
+    if (WS_TOKEN) {
+      url.searchParams.set("token", WS_TOKEN);
+    }
     return url.toString();
+  };
+
+  const flushPendingChunks = () => {
+    const ws = socketRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (pendingChunksRef.current.length === 0) {
+      isFlushingRef.current = false;
+      return;
+    }
+    isFlushingRef.current = true;
+    const sendBatch = () => {
+      const currentWs = socketRef.current;
+      if (!currentWs || currentWs.readyState !== WebSocket.OPEN) {
+        isFlushingRef.current = false;
+        return;
+      }
+      while (pendingChunksRef.current.length > 0) {
+        if (currentWs.bufferedAmount > BUFFERED_AMOUNT_LIMIT) {
+          flushTimerRef.current = setTimeout(sendBatch, 50);
+          return;
+        }
+        const msg = pendingChunksRef.current.shift();
+        if (!msg) break;
+        pendingBytesRef.current -= msg.length;
+        currentWs.send(msg);
+      }
+      isFlushingRef.current = false;
+    };
+    sendBatch();
+  };
+
+  const sendOrQueue = (payload: string) => {
+    const ws = socketRef.current;
+    if (isFlushingRef.current || !ws || ws.readyState !== WebSocket.OPEN) {
+      pendingChunksRef.current.push(payload);
+      pendingBytesRef.current += payload.length;
+      while (pendingBytesRef.current > MAX_QUEUED_BYTES && pendingChunksRef.current.length > 0) {
+        const dropped = pendingChunksRef.current.shift();
+        if (!dropped) break;
+        pendingBytesRef.current -= dropped.length;
+      }
+      return;
+    }
+    ws.send(payload);
   };
 
   const playAudio = async (base64String: string) => {
