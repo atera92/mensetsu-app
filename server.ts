@@ -7,6 +7,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createClient } from "@supabase/supabase-js";
 
 dotenv.config({ path: ".env.local" });
 const PORT = Number(process.env.PORT) || 8080;
@@ -14,6 +15,13 @@ const PORT = Number(process.env.PORT) || 8080;
 const API_KEY = process.env.GEMINI_API_KEY;
 if (!API_KEY) {
   console.error("❌ エラー: APIキーが見つかりません");
+  process.exit(1);
+}
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("❌ エラー: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY が必要です");
   process.exit(1);
 }
 
@@ -32,20 +40,33 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 3 * 60 * 1000;
 const MAX_SESSION_MS = Number(process.env.MAX_SESSION_MS) || 15 * 60 * 1000;
 const MAX_SESSIONS = Number(process.env.MAX_SESSIONS) || 20;
 const MAX_RECORDING_BYTES = Number(process.env.MAX_RECORDING_BYTES) || 32 * 1024 * 1024;
+const DAILY_LIMIT_SECONDS = Number(process.env.DAILY_LIMIT_SECONDS) || 15 * 60;
 const AUDIO_WS_TOKEN = process.env.AUDIO_WS_TOKEN;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
+
 type Session = {
   id: string;
+  userId: string;
+  deviceId: string;
   geminiWs: WebSocket;
   clientWs: WebSocket | null;
   recordingBuffer: Buffer[];
   recordingBytes: number;
   disconnectTimer: NodeJS.Timeout | null;
   maxDurationTimer: NodeJS.Timeout | null;
+  dailyLimitTimer: NodeJS.Timeout | null;
+  activeSince: number | null;
+  accumulatedMs: number;
+  dailyUsageSecondsAtStart: number;
+  usageDateKey: string;
+  usageFinalized: boolean;
   lastClientInfo: { ip: string; origin: string; userAgent: string } | null;
   closed: boolean;
 };
@@ -73,6 +94,10 @@ const wss = new WebSocketServer({ port: PORT, host: "0.0.0.0" });
 console.log(`📞 面接サーバー(レーダーチャート対応)が起動しました :${PORT}`);
 
 wss.on("connection", (clientWs: WebSocket, request: IncomingMessage) => {
+  void handleConnection(clientWs, request);
+});
+
+async function handleConnection(clientWs: WebSocket, request: IncomingMessage) {
   const context = getRequestContext(request);
   if (!isOriginAllowed(context.origin)) {
     console.warn(`🚫 Origin blocked: ${context.origin || "unknown"}`);
@@ -84,8 +109,48 @@ wss.on("connection", (clientWs: WebSocket, request: IncomingMessage) => {
     clientWs.close(1008, "unauthorized");
     return;
   }
+  if (!context.authToken) {
+    console.warn("🚫 Missing auth token");
+    clientWs.close(1008, "missing auth");
+    return;
+  }
+  if (!context.deviceId) {
+    console.warn("🚫 Missing device id");
+    clientWs.close(1008, "missing device");
+    return;
+  }
+
+  const userId = await getUserIdFromToken(context.authToken);
+  if (!userId) {
+    console.warn("🚫 Invalid auth token");
+    clientWs.close(1008, "invalid auth");
+    return;
+  }
+
+  const deviceOk = await verifyDevice(userId, context.deviceId);
+  if (!deviceOk) {
+    console.warn(`🚫 Device mismatch (user=${userId})`);
+    clientWs.close(1008, "device mismatch");
+    return;
+  }
+
+  const dateKey = getDateKey();
+  const usedSeconds = await getDailyUsageSeconds(userId, dateKey);
+  if (usedSeconds >= DAILY_LIMIT_SECONDS) {
+    console.warn(`🚫 Daily limit reached (user=${userId})`);
+    clientWs.close(1008, "daily limit reached");
+    return;
+  }
+
   const sessionId = getSessionId(context.url);
   let session = sessions.get(sessionId);
+  const existingForUser = findSessionByUser(userId, sessionId);
+  if (existingForUser) {
+    console.warn(`🚫 User already has active session (user=${userId})`);
+    clientWs.close(1008, "already in use");
+    return;
+  }
+
   if (!session && sessions.size >= MAX_SESSIONS) {
     console.warn("🚫 Max sessions reached");
     clientWs.close(1013, "server busy");
@@ -94,12 +159,16 @@ wss.on("connection", (clientWs: WebSocket, request: IncomingMessage) => {
 
   if (!session || session.closed || session.geminiWs.readyState === WebSocket.CLOSED) {
     if (session) cleanupSession(session, "stale");
-    session = createSession(sessionId);
+    session = createSession(sessionId, userId, context.deviceId, usedSeconds, dateKey);
     sessions.set(sessionId, session);
+  } else if (session.userId !== userId) {
+    console.warn(`🚫 Session user mismatch (session=${sessionId})`);
+    clientWs.close(1008, "session mismatch");
+    return;
   }
 
   attachClient(session, clientWs, context);
-});
+}
 
 function getSessionId(url: URL) {
   const sid = url.searchParams.get("sid");
@@ -111,13 +180,15 @@ function getRequestContext(request: IncomingMessage) {
   const url = new URL(request.url ?? "/", `http://${host}`);
   const origin = request.headers.origin ?? "";
   const token = url.searchParams.get("token") ?? "";
+  const authToken = url.searchParams.get("auth") ?? "";
+  const deviceId = url.searchParams.get("device") ?? "";
   const ipHeader = request.headers["x-forwarded-for"];
   const ip = Array.isArray(ipHeader)
     ? ipHeader[0]
     : (ipHeader ?? request.socket.remoteAddress ?? "").toString().split(",")[0].trim();
   const userAgent = request.headers["user-agent"] ?? "";
 
-  return { url, origin, token, ip, userAgent };
+  return { url, origin, token, authToken, deviceId, ip, userAgent };
 }
 
 function isOriginAllowed(origin: string) {
@@ -125,16 +196,30 @@ function isOriginAllowed(origin: string) {
   return ALLOWED_ORIGINS.includes(origin);
 }
 
-function createSession(id: string): Session {
+function createSession(
+  id: string,
+  userId: string,
+  deviceId: string,
+  usedSeconds: number,
+  dateKey: string
+): Session {
   const geminiWs = new WebSocket(GEMINI_URL);
   const session: Session = {
     id,
+    userId,
+    deviceId,
     geminiWs,
     clientWs: null,
     recordingBuffer: [],
     recordingBytes: 0,
     disconnectTimer: null,
     maxDurationTimer: null,
+    dailyLimitTimer: null,
+    activeSince: null,
+    accumulatedMs: 0,
+    dailyUsageSecondsAtStart: usedSeconds,
+    usageDateKey: dateKey,
+    usageFinalized: false,
     lastClientInfo: null,
     closed: false,
   };
@@ -142,6 +227,9 @@ function createSession(id: string): Session {
   console.log(`👤 新規セッション開始: ${id}`);
   session.maxDurationTimer = setTimeout(() => {
     if (session.closed) return;
+    if (session.clientWs && session.clientWs.readyState === WebSocket.OPEN) {
+      session.clientWs.close(1000, "max duration");
+    }
     cleanupSession(session, "max-duration");
   }, MAX_SESSION_MS);
 
@@ -200,6 +288,7 @@ function attachClient(session: Session, clientWs: WebSocket, context: ReturnType
     userAgent: context.userAgent,
   };
   console.log(`🔌 接続: ${session.id} (ip=${context.ip || "unknown"})`);
+  startUsageTimer(session);
 
   clientWs.on("message", (data: any) => {
     handleClientMessage(session, data);
@@ -208,6 +297,7 @@ function attachClient(session: Session, clientWs: WebSocket, context: ReturnType
   clientWs.on("close", () => {
     session.clientWs = null;
     console.log(`🔌 切断: ${session.id}`);
+    pauseUsageTimer(session);
     if (session.closed) {
       cleanupSession(session, "client-closed");
       return;
@@ -227,10 +317,12 @@ function handleClientMessage(session: Session, data: any) {
         clearTimeout(session.disconnectTimer);
         session.disconnectTimer = null;
       }
+      pauseUsageTimer(session);
       generateScore(session.recordingBuffer).then((feedback) => {
         if (feedback && session.clientWs?.readyState === WebSocket.OPEN) {
           session.clientWs.send(JSON.stringify({ type: "FEEDBACK_RESULT", data: feedback }));
         }
+        void finalizeUsage(session);
         cleanupSession(session, "finished");
       });
       return;
@@ -254,6 +346,8 @@ function scheduleSessionExpiry(session: Session) {
   if (session.disconnectTimer) return;
   session.disconnectTimer = setTimeout(() => {
     session.closed = true;
+    pauseUsageTimer(session);
+    void finalizeUsage(session);
     cleanupSession(session, "timeout");
   }, SESSION_TTL_MS);
 }
@@ -268,10 +362,154 @@ function appendRecording(session: Session, chunk: Buffer) {
   }
 }
 
+function getDateKey(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function findSessionByUser(userId: string, currentSessionId: string) {
+  for (const session of sessions.values()) {
+    if (!session.closed && session.userId === userId && session.id !== currentSessionId) {
+      return session;
+    }
+  }
+  return null;
+}
+
+async function getUserIdFromToken(token: string) {
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data.user) return null;
+  return data.user.id;
+}
+
+async function verifyDevice(userId: string, deviceId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("user_devices")
+    .select("device_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return false;
+  if (data.device_id !== deviceId) return false;
+
+  await supabaseAdmin
+    .from("user_devices")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("device_id", deviceId);
+
+  return true;
+}
+
+async function getDailyUsageSeconds(userId: string, dateKey: string) {
+  const { data, error } = await supabaseAdmin
+    .from("daily_usage")
+    .select("seconds_used")
+    .eq("user_id", userId)
+    .eq("date", dateKey)
+    .maybeSingle();
+
+  if (error) {
+    console.error("daily_usage lookup error:", error.message);
+    return DAILY_LIMIT_SECONDS;
+  }
+  return data?.seconds_used ?? 0;
+}
+
+async function addDailyUsageSeconds(userId: string, dateKey: string, secondsToAdd: number) {
+  if (secondsToAdd <= 0) return;
+  const { data, error } = await supabaseAdmin
+    .from("daily_usage")
+    .select("seconds_used")
+    .eq("user_id", userId)
+    .eq("date", dateKey)
+    .maybeSingle();
+
+  if (error) {
+    console.error("daily_usage read error:", error.message);
+    return;
+  }
+
+  const current = data?.seconds_used ?? 0;
+  const next = current + secondsToAdd;
+
+  if (data) {
+    const { error: updateError } = await supabaseAdmin
+      .from("daily_usage")
+      .update({ seconds_used: next, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .eq("date", dateKey);
+    if (updateError) console.error("daily_usage update error:", updateError.message);
+  } else {
+    const { error: insertError } = await supabaseAdmin.from("daily_usage").insert({
+      user_id: userId,
+      date: dateKey,
+      seconds_used: next,
+      updated_at: new Date().toISOString(),
+    });
+    if (insertError) console.error("daily_usage insert error:", insertError.message);
+  }
+}
+
+function startUsageTimer(session: Session) {
+  if (session.activeSince) return;
+  const remainingSeconds = getRemainingSeconds(session);
+  if (remainingSeconds <= 0) {
+    enforceDailyLimit(session);
+    return;
+  }
+  session.activeSince = Date.now();
+  scheduleDailyLimitTimer(session, remainingSeconds);
+}
+
+function pauseUsageTimer(session: Session) {
+  if (session.activeSince) {
+    session.accumulatedMs += Date.now() - session.activeSince;
+    session.activeSince = null;
+  }
+  if (session.dailyLimitTimer) {
+    clearTimeout(session.dailyLimitTimer);
+    session.dailyLimitTimer = null;
+  }
+}
+
+function getRemainingSeconds(session: Session) {
+  const usedSeconds = session.dailyUsageSecondsAtStart + Math.floor(session.accumulatedMs / 1000);
+  return DAILY_LIMIT_SECONDS - usedSeconds;
+}
+
+function scheduleDailyLimitTimer(session: Session, remainingSeconds: number) {
+  if (session.dailyLimitTimer) {
+    clearTimeout(session.dailyLimitTimer);
+  }
+  session.dailyLimitTimer = setTimeout(() => {
+    enforceDailyLimit(session);
+  }, remainingSeconds * 1000);
+}
+
+function enforceDailyLimit(session: Session) {
+  if (session.closed) return;
+  session.closed = true;
+  pauseUsageTimer(session);
+  void finalizeUsage(session);
+  if (session.clientWs && session.clientWs.readyState === WebSocket.OPEN) {
+    session.clientWs.close(1008, "daily limit reached");
+  }
+  cleanupSession(session, "daily-limit");
+}
+
+async function finalizeUsage(session: Session) {
+  if (session.usageFinalized) return;
+  session.usageFinalized = true;
+  pauseUsageTimer(session);
+  const secondsToAdd = Math.floor(session.accumulatedMs / 1000);
+  await addDailyUsageSeconds(session.userId, session.usageDateKey, secondsToAdd);
+}
+
 function cleanupSession(session: Session, reason: string) {
   if (session.closed === false) {
     session.closed = true;
   }
+  void finalizeUsage(session);
   if (session.disconnectTimer) {
     clearTimeout(session.disconnectTimer);
     session.disconnectTimer = null;

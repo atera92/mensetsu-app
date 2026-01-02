@@ -1,25 +1,61 @@
-# Welcome to Next.js
+# mensetsu-app
 
-This is the most minimal starter for your Next.js project.
+面接練習アプリ（Next.js + Supabase + 音声WebSocket）。
 
-## Deploy your own
+## 必須環境変数
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/vercel/next.js/tree/canary/examples/hello-world&project-name=hello-world&repository-name=hello-world)
+### フロント（Vercel）
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_WS_URL`（例: `wss://<audio-server-host>`）
+- `NEXT_PUBLIC_WS_TOKEN`（音声サーバーと同じ値）
 
-## How to use
+### 音声サーバー（Render など）
+- `GEMINI_API_KEY`
+- `SUPABASE_URL`（SupabaseのプロジェクトURL）
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `AUDIO_WS_TOKEN`（フロントの `NEXT_PUBLIC_WS_TOKEN` と同じ値）
+- `ALLOWED_ORIGINS`（カンマ区切り）
+- `MAX_SESSIONS`（例: `5`）
+- `MAX_SESSION_MS`（例: `600000` = 10分）
+- `SESSION_TTL_MS`（例: `180000` = 切断後3分）
+- `MAX_RECORDING_BYTES`（例: `67108864` = 64MB）
+- `DAILY_LIMIT_SECONDS`（例: `900` = 15分）
 
-Execute [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app) with [npm](https://docs.npmjs.com/cli/init), [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/), or [pnpm](https://pnpm.io) to bootstrap the example:
+## Supabase テーブル設定
 
-```bash
-npx create-next-app --example hello-world hello-world-app
+```sql
+create table if not exists user_devices (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  device_id text unique not null,
+  last_seen_at timestamptz not null default now()
+);
+
+alter table user_devices enable row level security;
+
+create policy "user_devices own access" on user_devices
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create table if not exists daily_usage (
+  user_id uuid references auth.users(id) on delete cascade,
+  date date not null,
+  seconds_used integer not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, date)
+);
+
+alter table daily_usage enable row level security;
 ```
 
-```bash
-yarn create next-app --example hello-world hello-world-app
-```
+## ローカル起動
 
 ```bash
-pnpm create next-app --example hello-world hello-world-app
+npm install
+npm run dev
 ```
 
-Deploy it to the cloud with [Vercel](https://vercel.com/new?utm_source=github&utm_medium=readme&utm_campaign=next-example) ([Documentation](https://nextjs.org/docs/deployment)).
+## 音声サーバー起動
+
+```bash
+npx tsx server.ts
+```

@@ -126,6 +126,8 @@ export default function InterviewPage() {
   const pendingBytesRef = useRef(0);
   const isFlushingRef = useRef(false);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const accessTokenRef = useRef<string | null>(null);
+  const deviceIdRef = useRef<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoFinishedRef = useRef(false);
@@ -306,6 +308,8 @@ export default function InterviewPage() {
       reconnectTimerRef.current = null;
       reconnectAttemptsRef.current = attempt;
       try {
+        await ensureAccessToken();
+        ensureDeviceId();
         const stream = await ensureStream();
         openSocket(stream, true);
       } catch (error) {
@@ -380,6 +384,8 @@ export default function InterviewPage() {
       setStatus("接続中...");
       resetReconnectState();
       shouldReconnectRef.current = true;
+      await ensureAccessToken();
+      ensureDeviceId();
       ensureSessionId();
       const stream = await ensureStream();
       openSocket(stream);
@@ -484,7 +490,33 @@ export default function InterviewPage() {
     if (WS_TOKEN) {
       url.searchParams.set("token", WS_TOKEN);
     }
+    if (accessTokenRef.current) {
+      url.searchParams.set("auth", accessTokenRef.current);
+    }
+    if (deviceIdRef.current) {
+      url.searchParams.set("device", deviceIdRef.current);
+    }
     return url.toString();
+  };
+
+  const ensureAccessToken = async () => {
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.access_token) {
+      throw new Error("認証情報が取得できませんでした");
+    }
+    accessTokenRef.current = data.session.access_token;
+  };
+
+  const ensureDeviceId = () => {
+    if (deviceIdRef.current) return;
+    let deviceId = window.localStorage.getItem("device_id");
+    if (!deviceId) {
+      deviceId = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      window.localStorage.setItem("device_id", deviceId);
+    }
+    deviceIdRef.current = deviceId;
   };
 
   const flushPendingChunks = () => {

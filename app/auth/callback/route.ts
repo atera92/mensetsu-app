@@ -33,6 +33,49 @@ export async function GET(request: NextRequest) {
 
     // ここで「ログイン済みの印（cookie）」が保存される
     if (!error) {
+      const deviceId = cookieStore.get("device_id")?.value;
+      if (!deviceId) {
+        await supabase.auth.signOut();
+        return NextResponse.redirect(`${origin}/login?error=device_id_missing`);
+      }
+
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      const user = userData?.user;
+      if (userError || !user) {
+        await supabase.auth.signOut();
+        return NextResponse.redirect(`${origin}/login?error=user_missing`);
+      }
+
+      const { data: existingDevice, error: deviceError } = await supabase
+        .from("user_devices")
+        .select("device_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (deviceError) {
+        await supabase.auth.signOut();
+        return NextResponse.redirect(`${origin}/login?error=device_lookup_failed`);
+      }
+
+      if (existingDevice && existingDevice.device_id !== deviceId) {
+        await supabase.auth.signOut();
+        return NextResponse.redirect(`${origin}/login?error=single_device_only`);
+      }
+
+      const { error: upsertError } = await supabase.from("user_devices").upsert(
+        {
+          user_id: user.id,
+          device_id: deviceId,
+          last_seen_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (upsertError) {
+        await supabase.auth.signOut();
+        return NextResponse.redirect(`${origin}/login?error=device_in_use`);
+      }
+
       return response;
     }
   }

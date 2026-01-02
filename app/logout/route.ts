@@ -29,6 +29,12 @@ export async function POST(request: NextRequest) {
     }
   );
 
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData?.user;
+  if (user) {
+    await supabase.from("user_devices").delete().eq("user_id", user.id);
+  }
+
   await supabase.auth.signOut();
 
   return response;
