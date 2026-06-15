@@ -4,10 +4,16 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Mic, PhoneOff, ArrowLeft, Volume2, Trophy, AlertTriangle, Quote, Loader2, Save } from "lucide-react";
+import { Mic, PhoneOff, ArrowLeft, Volume2, Trophy, AlertTriangle, Quote, Loader2, Save, Lock, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../lib/supabase/client";
+import {
+  SCENARIOS,
+  DIFFICULTIES,
+  type ScenarioKey,
+  type DifficultyKey,
+} from "../../lib/interview";
 
 const SERVER_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 const WS_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN;
@@ -115,6 +121,16 @@ export default function InterviewPage() {
   // 無料枠（1日の利用上限）に到達したらアップグレードを促す
   const [limitReached, setLimitReached] = useState(false);
 
+  // 面接のパーソナライズ設定
+  const [plan, setPlan] = useState<"free" | "premium" | null>(null);
+  const [scenario, setScenario] = useState<ScenarioKey>("general");
+  const [difficulty, setDifficulty] = useState<DifficultyKey>("normal");
+  const [company, setCompany] = useState("");
+  const [role, setRole] = useState("");
+  const [focus, setFocus] = useState("");
+  const [material, setMaterial] = useState("");
+  const [setupError, setSetupError] = useState<string | null>(null);
+
   // 10分タイマー
   const [timeLeftSec, setTimeLeftSec] = useState<number>(INTERVIEW_DURATION_SEC);
 
@@ -208,6 +224,68 @@ export default function InterviewPage() {
       listener.subscription.unsubscribe();
     };
   }, [router, supabase]);
+
+  // ✅ プラン判定（プレミアムなら個別化機能を解放）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const uid = sessionData.session?.user?.id;
+      if (!uid) return;
+      const { data } = await supabase
+        .from("subscriptions")
+        .select("plan, status, current_period_end")
+        .eq("user_id", uid)
+        .maybeSingle();
+      if (cancelled) return;
+      const active =
+        !!data &&
+        (data.status === "active" || data.status === "trialing") &&
+        data.plan === "premium" &&
+        (!data.current_period_end ||
+          new Date(data.current_period_end).getTime() >= Date.now());
+      setPlan(active ? "premium" : "free");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  // ✅ 面接設定を保存してから接続する
+  const startInterview = async () => {
+    setSetupError(null);
+    try {
+      ensureSessionId();
+      const sid = sessionIdRef.current!;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const uid = sessionData.session?.user?.id;
+      if (!uid) {
+        router.replace("/login");
+        return;
+      }
+      const row: Record<string, unknown> = {
+        session_id: sid,
+        user_id: uid,
+        scenario,
+        difficulty,
+      };
+      if (plan === "premium") {
+        row.company = company.trim() || null;
+        row.role = role.trim() || null;
+        row.focus = focus.trim() || null;
+        row.material = material.trim() || null;
+      }
+      const { error } = await supabase.from("interview_setups").insert(row);
+      if (error) {
+        // 設定保存に失敗しても面接自体は続行（デフォルト面接になる）
+        console.error("interview_setups insert error:", error);
+      }
+      await connect();
+    } catch (e) {
+      console.error(e);
+      setSetupError("開始に失敗しました。もう一度お試しください。");
+    }
+  };
 
   const saveToSupabase = async (data: FeedbackData) => {
     setSaveStatus("saving");
@@ -605,37 +683,145 @@ export default function InterviewPage() {
     }
   };
 
+  const idle = !isConnected && !isAnalyzing && !feedback && !isReconnecting;
+
   return (
-    <div className="h-screen bg-slate-50 flex flex-col items-center justify-center relative">
-        <div className="bg-white p-10 rounded-3xl shadow-xl flex flex-col items-center max-w-md w-full border border-slate-100 z-10">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center relative py-8 px-4">
+        <div className="bg-white p-8 rounded-3xl shadow-xl flex flex-col items-center max-w-lg w-full border border-slate-100 z-10">
             <Link href="/" className="self-start text-slate-400 hover:text-slate-600 mb-6 flex items-center text-sm font-bold"><ArrowLeft className="w-4 h-4 mr-1" /> TOPへ戻る</Link>
 
-            {isConnected && !isAnalyzing && (
-              <div className="mb-4 w-full flex items-center justify-center">
-                <div className="px-4 py-2 rounded-full bg-slate-100 text-slate-700 text-sm font-bold">
-                  残り時間: <span className="text-slate-900">{formatTime(timeLeftSec)}</span>
+            {idle ? (
+              <div className="w-full">
+                <h2 className="text-xl font-bold text-slate-800">面接の設定</h2>
+                <p className="mt-1 mb-5 text-sm text-slate-500">受ける面接に合わせると、質問があなた向けに最適化されます。</p>
+
+                {/* シナリオ選択（無料） */}
+                <p className="mb-2 text-xs font-bold tracking-wide text-slate-400">面接の種類</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {SCENARIOS.map((s) => (
+                    <button
+                      key={s.key}
+                      type="button"
+                      onClick={() => setScenario(s.key)}
+                      className={`rounded-xl border p-3 text-left transition ${
+                        scenario === s.key
+                          ? "border-blue-500 bg-blue-50"
+                          : "border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <span className="block text-sm font-bold text-slate-800">{s.label}</span>
+                      <span className="block text-[11px] leading-tight text-slate-400">{s.description}</span>
+                    </button>
+                  ))}
                 </div>
+
+                {/* 難易度（無料） */}
+                <p className="mb-2 mt-5 text-xs font-bold tracking-wide text-slate-400">面接官のトーン</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {DIFFICULTIES.map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => setDifficulty(d.key)}
+                      className={`rounded-xl border p-2 text-center transition ${
+                        difficulty === d.key
+                          ? "border-blue-500 bg-blue-50"
+                          : "border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <span className="block text-sm font-bold text-slate-800">{d.label}</span>
+                      <span className="block text-[11px] leading-tight text-slate-400">{d.description}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* 個別化（プレミアム） */}
+                <div className="mt-5">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-emerald-500" />
+                    <p className="text-xs font-bold tracking-wide text-slate-500">あなた専用にする（プレミアム）</p>
+                  </div>
+
+                  {plan === "premium" ? (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          value={company}
+                          onChange={(e) => setCompany(e.target.value)}
+                          placeholder="応募先の企業名"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                        <input
+                          value={role}
+                          onChange={(e) => setRole(e.target.value)}
+                          placeholder="応募職種"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                      </div>
+                      <input
+                        value={focus}
+                        onChange={(e) => setFocus(e.target.value)}
+                        placeholder="特に練習したい点（例：志望動機の深掘り）"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                      />
+                      <textarea
+                        value={material}
+                        onChange={(e) => setMaterial(e.target.value)}
+                        placeholder="あなたのES・自己PR・職務経歴を貼り付け（この内容に沿って深掘りします）"
+                        rows={4}
+                        className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                      />
+                    </div>
+                  ) : (
+                    <Link
+                      href="/pricing"
+                      className="flex items-start gap-3 rounded-xl border border-dashed border-emerald-300 bg-emerald-50/60 p-4 transition hover:bg-emerald-50"
+                    >
+                      <Lock className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                      <span className="text-sm text-emerald-800">
+                        <span className="font-bold">企業名・職種・あなたのESに合わせた面接</span>はプレミアム機能です。
+                        本番そのままの質問で練習できます。
+                        <span className="mt-1 block font-bold text-emerald-600">プレミアムを見る →</span>
+                      </span>
+                    </Link>
+                  )}
+                </div>
+
+                {setupError && <p className="mt-3 text-center text-sm text-rose-500">{setupError}</p>}
+
+                <button
+                  onClick={startInterview}
+                  className="mt-6 w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center"
+                >
+                  <Mic className="w-5 h-5 mr-2" /> この設定で面接を始める
+                </button>
               </div>
-            )}
-            
-            <div className={`relative w-48 h-48 rounded-full flex items-center justify-center transition-all duration-300 mb-8 ${isConnected ? "bg-blue-50 shadow-inner" : "bg-slate-100"}`}>
-                {isConnected && !isAnalyzing && <div className="absolute inset-0 rounded-full bg-blue-500 opacity-20 animate-pulse" style={{ transform: `scale(${1 + volume})` }}></div>}
-                {isAnalyzing ? <Loader2 className="w-20 h-20 text-blue-600 animate-spin" /> : isConnected ? <Volume2 className="w-20 h-20 text-blue-600" /> : <Mic className="w-20 h-20 text-slate-300" />}
-            </div>
-
-            <h2 className="text-2xl font-bold text-slate-800 mb-2">{status}</h2>
-            <p className="text-slate-500 mb-8 text-center text-sm">{isConnected ? "音声会話中" : "ボタンを押して面接を開始"}</p>
-
-            {!isConnected ? (
-                isReconnecting ? (
-                  <button disabled className="w-full py-4 bg-slate-400 text-white rounded-xl font-bold text-lg shadow-lg flex items-center justify-center">
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" /> 再接続中...
-                  </button>
-                ) : (
-                  <button onClick={connect} className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center"><Mic className="w-5 h-5 mr-2" /> 面接を始める</button>
-                )
             ) : (
-                <button onClick={finishInterview} disabled={isAnalyzing} className={`w-full py-4 ${isAnalyzing ? "bg-slate-400" : "bg-red-500 hover:bg-red-600"} text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center`}><PhoneOff className="w-5 h-5 mr-2" /> {isAnalyzing ? "採点中..." : "面接終了・採点"}</button>
+              <>
+                {isConnected && !isAnalyzing && (
+                  <div className="mb-4 w-full flex items-center justify-center">
+                    <div className="px-4 py-2 rounded-full bg-slate-100 text-slate-700 text-sm font-bold">
+                      残り時間: <span className="text-slate-900">{formatTime(timeLeftSec)}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className={`relative w-48 h-48 rounded-full flex items-center justify-center transition-all duration-300 mb-8 ${isConnected ? "bg-blue-50 shadow-inner" : "bg-slate-100"}`}>
+                    {isConnected && !isAnalyzing && <div className="absolute inset-0 rounded-full bg-blue-500 opacity-20 animate-pulse" style={{ transform: `scale(${1 + volume})` }}></div>}
+                    {isAnalyzing ? <Loader2 className="w-20 h-20 text-blue-600 animate-spin" /> : isConnected ? <Volume2 className="w-20 h-20 text-blue-600" /> : <Mic className="w-20 h-20 text-slate-300" />}
+                </div>
+
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">{status}</h2>
+                <p className="text-slate-500 mb-8 text-center text-sm">{isConnected ? "音声会話中" : "面接を準備中"}</p>
+
+                {!isConnected ? (
+                    <button disabled className="w-full py-4 bg-slate-400 text-white rounded-xl font-bold text-lg shadow-lg flex items-center justify-center">
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" /> {isAnalyzing ? "採点中..." : "再接続中..."}
+                    </button>
+                ) : (
+                    <button onClick={finishInterview} disabled={isAnalyzing} className={`w-full py-4 ${isAnalyzing ? "bg-slate-400" : "bg-red-500 hover:bg-red-600"} text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center`}><PhoneOff className="w-5 h-5 mr-2" /> {isAnalyzing ? "採点中..." : "面接終了・採点"}</button>
+                )}
+              </>
             )}
         </div>
 
