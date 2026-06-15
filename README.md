@@ -1,6 +1,15 @@
 # mensetsu-app
 
 面接練習アプリ（Next.js + Supabase + 音声WebSocket）。
+フリーミアム課金（Stripe月額サブスク）に対応。事業設計は [BUSINESS.md](./BUSINESS.md) を参照。
+
+## 課金（フリーミアム）
+
+- Free: 1日15分まで無料
+- Premium: 月額¥980で1日120分まで
+- 加入/解約/権限付与はすべて Stripe Webhook 経由で自動同期（`app/api/billing/*`）。
+
+セットアップ手順は [BUSINESS.md](./BUSINESS.md) の「6. セットアップ手順」を参照。
 
 ## 必須環境変数
 
@@ -9,6 +18,10 @@
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `NEXT_PUBLIC_WS_URL`（例: `wss://<audio-server-host>`）
 - `NEXT_PUBLIC_WS_TOKEN`（音声サーバーと同じ値）
+- `NEXT_PUBLIC_SITE_URL`（例: `https://<本番ドメイン>`。Checkout/ポータルのリダイレクト先）
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_ID`（Premium月額のPrice ID）
 
 ### 音声サーバー（Render など）
 - `GEMINI_API_KEY`
@@ -20,7 +33,8 @@
 - `MAX_SESSION_MS`（例: `600000` = 10分）
 - `SESSION_TTL_MS`（例: `180000` = 切断後3分）
 - `MAX_RECORDING_BYTES`（例: `67108864` = 64MB）
-- `DAILY_LIMIT_SECONDS`（例: `900` = 15分）
+- `DAILY_LIMIT_SECONDS`（例: `900` = 15分。Freeの上限）
+- `PREMIUM_DAILY_LIMIT_SECONDS`（例: `7200` = 120分。Premiumの上限）
 
 ## Supabase テーブル設定
 
@@ -46,6 +60,8 @@ create table if not exists daily_usage (
 
 alter table daily_usage enable row level security;
 ```
+
+課金テーブル（`subscriptions`）は [`supabase/schema.sql`](./supabase/schema.sql) を実行して作成してください。
 
 ## ローカル起動
 
