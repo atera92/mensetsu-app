@@ -686,7 +686,7 @@ export default function InterviewPage() {
   const idle = !isConnected && !isAnalyzing && !feedback && !isReconnecting;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center relative py-8 px-4">
+    <div className="min-h-screen flex flex-col items-center justify-center relative py-8 px-4">
         <div className="bg-white p-8 rounded-3xl shadow-xl flex flex-col items-center max-w-lg w-full border border-slate-100 z-10">
             <Link href="/" className="self-start text-slate-400 hover:text-slate-600 mb-6 flex items-center text-sm font-bold"><ArrowLeft className="w-4 h-4 mr-1" /> TOPへ戻る</Link>
 
@@ -705,7 +705,7 @@ export default function InterviewPage() {
                       onClick={() => setScenario(s.key)}
                       className={`rounded-xl border p-3 text-left transition ${
                         scenario === s.key
-                          ? "border-blue-500 bg-blue-50"
+                          ? "border-brand bg-brand-50"
                           : "border-slate-200 hover:border-slate-300"
                       }`}
                     >
@@ -725,7 +725,7 @@ export default function InterviewPage() {
                       onClick={() => setDifficulty(d.key)}
                       className={`rounded-xl border p-2 text-center transition ${
                         difficulty === d.key
-                          ? "border-blue-500 bg-blue-50"
+                          ? "border-brand bg-brand-50"
                           : "border-slate-200 hover:border-slate-300"
                       }`}
                     >
@@ -749,27 +749,27 @@ export default function InterviewPage() {
                           value={company}
                           onChange={(e) => setCompany(e.target.value)}
                           placeholder="応募先の企業名"
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
                         />
                         <input
                           value={role}
                           onChange={(e) => setRole(e.target.value)}
                           placeholder="応募職種"
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
                         />
                       </div>
                       <input
                         value={focus}
                         onChange={(e) => setFocus(e.target.value)}
                         placeholder="特に練習したい点（例：志望動機の深掘り）"
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
                       />
                       <textarea
                         value={material}
                         onChange={(e) => setMaterial(e.target.value)}
                         placeholder="あなたのES・自己PR・職務経歴を貼り付け（この内容に沿って深掘りします）"
                         rows={4}
-                        className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
                       />
                     </div>
                   ) : (
@@ -791,7 +791,7 @@ export default function InterviewPage() {
 
                 <button
                   onClick={startInterview}
-                  className="mt-6 w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center"
+                  className="mt-6 w-full py-4 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center"
                 >
                   <Mic className="w-5 h-5 mr-2" /> この設定で面接を始める
                 </button>
@@ -806,9 +806,9 @@ export default function InterviewPage() {
                   </div>
                 )}
 
-                <div className={`relative w-48 h-48 rounded-full flex items-center justify-center transition-all duration-300 mb-8 ${isConnected ? "bg-blue-50 shadow-inner" : "bg-slate-100"}`}>
-                    {isConnected && !isAnalyzing && <div className="absolute inset-0 rounded-full bg-blue-500 opacity-20 animate-pulse" style={{ transform: `scale(${1 + volume})` }}></div>}
-                    {isAnalyzing ? <Loader2 className="w-20 h-20 text-blue-600 animate-spin" /> : isConnected ? <Volume2 className="w-20 h-20 text-blue-600" /> : <Mic className="w-20 h-20 text-slate-300" />}
+                <div className={`relative w-48 h-48 rounded-full flex items-center justify-center transition-all duration-300 mb-8 ${isConnected ? "bg-brand-50 shadow-inner" : "bg-slate-100"}`}>
+                    {isConnected && !isAnalyzing && <div className="absolute inset-0 rounded-full bg-brand-500 opacity-20 animate-pulse" style={{ transform: `scale(${1 + volume})` }}></div>}
+                    {isAnalyzing ? <Loader2 className="w-20 h-20 text-brand-600 animate-spin" /> : isConnected ? <Volume2 className="w-20 h-20 text-brand-600" /> : <Mic className="w-20 h-20 text-slate-300" />}
                 </div>
 
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">{status}</h2>
@@ -866,7 +866,7 @@ export default function InterviewPage() {
                     </div>
                     <div className="text-center mb-6">
                         <p className="text-sm font-bold text-slate-400 tracking-widest">TOTAL SCORE</p>
-                        <h2 className="text-6xl font-black text-blue-600">{feedback.score}<span className="text-2xl text-slate-300 ml-1">/100</span></h2>
+                        <h2 className="text-6xl font-black text-brand-600">{feedback.score}<span className="text-2xl text-slate-300 ml-1">/100</span></h2>
                     </div>
                     <div className="mb-8 flex justify-center">
                         <RadarChart metrics={feedback.metrics} />

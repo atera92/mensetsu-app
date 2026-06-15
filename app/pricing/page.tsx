@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Check, ShieldCheck } from "lucide-react";
 import { createClient } from "../../lib/supabase/server";
 import { getUserPlan } from "../../lib/subscription";
 import { PREMIUM_PRICE_JPY } from "../../lib/plan";
@@ -30,65 +31,73 @@ export default async function PricingPage() {
   ];
 
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-16">
+    <main className="min-h-screen px-5 py-16 sm:py-20">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-12 text-center">
-          <Link href="/" className="text-sm font-bold text-slate-400 hover:text-emerald-600">
+        <div className="mb-12 text-center animate-rise">
+          <Link href="/" className="text-sm font-semibold text-muted transition hover:text-ink">
             ← TOPに戻る
           </Link>
-          <h1 className="mt-4 text-3xl font-bold text-slate-800">料金プラン</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            本気の面接対策に、練習量の上限を外す。
+          <p className="mt-6 text-[11px] font-semibold uppercase tracking-[0.4em] text-brand-700">
+            Pricing
+          </p>
+          <h1 className="mt-2 text-3xl font-bold text-ink sm:text-4xl">
+            本番に合わせて、<span className="gradient-text">本気で仕上げる</span>。
+          </h1>
+          <p className="mt-3 text-sm text-muted">
+            無料で試して、納得したらプレミアムへ。いつでも解約できます。
           </p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid items-start gap-6 md:grid-cols-2">
           {/* Free */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-            <p className="text-sm font-bold tracking-widest text-slate-400">FREE</p>
-            <p className="mt-2 text-4xl font-black text-slate-800">¥0</p>
-            <p className="text-xs text-slate-400">まずはお試し</p>
-            <ul className="mt-6 space-y-3 text-sm text-slate-600">
+          <div className="card card-hover p-8">
+            <p className="text-xs font-bold uppercase tracking-[0.3em] text-muted">Free</p>
+            <p className="mt-3 text-4xl font-black text-ink">¥0</p>
+            <p className="mt-1 text-xs text-muted">まずはお試し</p>
+            <ul className="mt-6 space-y-3 text-sm text-ink/80">
               {freeFeatures.map((f) => (
-                <li key={f} className="flex items-start gap-2">
-                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-slate-400" />
+                <li key={f} className="flex items-start gap-2.5">
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                   {f}
                 </li>
               ))}
             </ul>
-            <div className="mt-8 rounded-lg bg-slate-100 py-3 text-center text-sm font-bold text-slate-500">
+            <div className="mt-8 rounded-full bg-slate-100 py-3 text-center text-sm font-bold text-muted">
               {plan === "free" ? "現在のプラン" : "ダウングレード可"}
             </div>
           </div>
 
           {/* Premium */}
-          <div className="relative rounded-2xl border-2 border-emerald-500 bg-white p-8 shadow-lg">
-            <span className="absolute -top-3 left-8 rounded-full bg-emerald-500 px-3 py-1 text-xs font-bold text-white">
+          <div className="relative overflow-hidden rounded-3xl p-[1.5px] shadow-halo-lg [background-image:var(--brand-grad)]">
+            <span className="absolute right-5 top-5 z-10 rounded-full bg-white/20 px-3 py-1 text-xs font-bold text-white backdrop-blur">
               おすすめ
             </span>
-            <p className="text-sm font-bold tracking-widest text-emerald-600">PREMIUM</p>
-            <p className="mt-2 text-4xl font-black text-slate-800">
-              ¥{PREMIUM_PRICE_JPY.toLocaleString()}
-              <span className="text-base font-bold text-slate-400">/月</span>
-            </p>
-            <p className="text-xs text-slate-400">いつでも解約OK</p>
-            <ul className="mt-6 space-y-3 text-sm text-slate-700">
-              {premiumFeatures.map((f) => (
-                <li key={f} className="flex items-start gap-2">
-                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <div className="mt-8">
-              <PricingActions plan={plan} loggedIn={Boolean(user)} />
+            <div className="relative rounded-[calc(1.5rem-1.5px)] bg-white p-8">
+              <p className="text-xs font-bold uppercase tracking-[0.3em] text-brand-700">Premium</p>
+              <p className="mt-3 text-4xl font-black text-ink">
+                ¥{PREMIUM_PRICE_JPY.toLocaleString()}
+                <span className="text-base font-bold text-muted">/月</span>
+              </p>
+              <p className="mt-1 text-xs text-muted">いつでも解約OK</p>
+              <ul className="mt-6 space-y-3 text-sm text-ink/90">
+                {premiumFeatures.map((f, i) => (
+                  <li key={f} className="flex items-start gap-2.5">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" />
+                    <span className={i < 2 ? "font-semibold" : ""}>{f}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-8">
+                <PricingActions plan={plan} loggedIn={Boolean(user)} />
+              </div>
             </div>
           </div>
         </div>
 
-        <p className="mt-10 text-center text-xs text-slate-400">
-          決済は Stripe により安全に処理されます。カード情報が当サービスに保存されることはありません。
-        </p>
+        <div className="mx-auto mt-10 flex max-w-md items-center justify-center gap-2 text-center text-xs text-muted">
+          <ShieldCheck className="h-4 w-4 text-brand-600" />
+          決済は Stripe により安全に処理されます。カード情報は当サービスに保存されません。
+        </div>
       </div>
     </main>
   );

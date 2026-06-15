@@ -36,7 +36,7 @@ export default function PricingActions({
       <button
         type="button"
         onClick={() => router.push("/login")}
-        className="w-full rounded-lg bg-emerald-500 py-3 text-center text-sm font-bold text-white transition hover:bg-emerald-600"
+        className="btn-primary w-full"
       >
         ログインして始める
       </button>
@@ -68,7 +68,7 @@ export default function PricingActions({
         type="button"
         disabled={loading}
         onClick={() => go("checkout")}
-        className="w-full rounded-lg bg-emerald-500 py-3 text-center text-sm font-bold text-white transition hover:bg-emerald-600 disabled:opacity-50"
+        className="btn-primary w-full"
       >
         {loading ? "リダイレクト中..." : "プレミアムを始める"}
       </button>

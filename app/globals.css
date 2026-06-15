@@ -1,47 +1,179 @@
-/* 必要最低限のスタイルのみ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================
+   デザイントークン（モダンSaaS / 信頼感のあるライトテーマ）
+   ブランドアクセント: エメラルド〜ティール
+   ========================================================= */
 :root {
-  --bg: #f6f1ea;
-  --bg-soft: #fff8f1;
-  --ink: #141518;
-  --muted: #6b6f76;
-  --accent: #0f766e;
-  --accent-2: #c7772f;
+  --bg: #f7f8fa;
+  --bg-soft: #ffffff;
+  --ink: #0b1020;
+  --muted: #667085;
+  --line: #e7eaf0;
+
+  --accent: #0f9b8e;      /* teal-emerald */
+  --accent-strong: #0c7d72;
+  --accent-2: #f59e0b;    /* amber（差し色） */
+
+  --brand-grad: linear-gradient(135deg, #12b3a3 0%, #0f766e 100%);
+  --halo: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px -8px rgba(16, 24, 40, 0.12);
+  --halo-lg: 0 1px 2px rgba(16, 24, 40, 0.04), 0 24px 60px -20px rgba(16, 24, 40, 0.22);
+  --glow: 0 10px 30px -10px rgba(15, 155, 142, 0.45);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  min-height: 100vh;
   color: var(--ink);
-  font-family: var(--font-body), "Hiragino Sans", "Noto Sans JP", sans-serif;
+  background-color: var(--bg);
+  /* 控えめなメッシュグラデーション背景（モダンの定番） */
+  background-image:
+    radial-gradient(60rem 60rem at 110% -10%, rgba(18, 179, 163, 0.10), transparent 60%),
+    radial-gradient(50rem 50rem at -10% 10%, rgba(245, 158, 11, 0.08), transparent 55%),
+    radial-gradient(40rem 40rem at 50% 120%, rgba(15, 118, 110, 0.07), transparent 60%);
+  background-attachment: fixed;
+  font-family: var(--font-body), "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
+::selection {
+  background: rgba(18, 179, 163, 0.22);
+}
+
+/* 細身のスクロールバー */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cdd3dd transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cdd3dd;
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #aeb6c4;
+  background-clip: content-box;
+}
+
+@layer base {
+  h1, h2, h3 {
+    letter-spacing: -0.02em;
+  }
+  /* アクセシブルなフォーカスリング */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+@layer components {
+  /* グラスカード（frosted glass） */
+  .glass {
+    @apply border border-white/60 bg-white/70 backdrop-blur-xl;
+    box-shadow: var(--halo);
+  }
+
+  /* 標準カード */
+  .card {
+    @apply rounded-3xl border border-[var(--line)] bg-white;
+    box-shadow: var(--halo);
+  }
+
+  .card-hover {
+    @apply transition duration-300;
+  }
+  .card-hover:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--halo-lg);
+  }
+
+  /* プライマリーボタン（ブランドグラデ + グロー） */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-bold text-white transition active:scale-[0.98];
+    background-image: var(--brand-grad);
+    box-shadow: var(--glow);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+  }
+  .btn-primary:disabled {
+    @apply cursor-not-allowed opacity-60;
+    transform: none;
+    filter: none;
+  }
+
+  /* セカンダリ（アウトライン） */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-[var(--line)] bg-white px-6 py-3 text-sm font-bold text-[var(--ink)] transition hover:border-[var(--accent)] hover:text-[var(--accent-strong)] active:scale-[0.98];
+  }
+
+  /* 入力欄 */
+  .input-field {
+    @apply w-full rounded-xl border border-[var(--line)] bg-white px-3.5 py-2.5 text-sm text-[var(--ink)] transition placeholder:text-slate-400 focus:border-[var(--accent)] focus:outline-none;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-white/80 px-3 py-1 text-xs font-semibold text-[var(--muted)];
+  }
+
+  .gradient-text {
+    background-image: var(--brand-grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+/* =========================================================
+   アニメーション
+   ========================================================= */
 @keyframes rise {
-  0% {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  0% { opacity: 0; transform: translateY(16px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-12px);
-  }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-rise {
+  opacity: 0;
+  animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   * {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
