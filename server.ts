@@ -8,6 +8,11 @@ import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from "@supabase/supabase-js";
+import {
+  buildInterviewPrompt,
+  buildJudgeContext,
+  type InterviewSetup,
+} from "./lib/interview";
 
 dotenv.config({ path: ".env.local" });
 const PORT = Number(process.env.PORT) || 8080;
@@ -68,6 +73,9 @@ type Session = {
   accumulatedMs: number;
   dailyUsageSecondsAtStart: number;
   dailyLimitSeconds: number;
+  systemPrompt: string;
+  setup: InterviewSetup | null;
+  isPremium: boolean;
   usageDateKey: string;
   usageFinalized: boolean;
   lastClientInfo: { ip: string; origin: string; userAgent: string } | null;
@@ -83,38 +91,8 @@ const initialSetupMessage = {
   },
 };
 
-const systemPrompt = `
-【役割】
-あなたは日本語で話す、厳格だが公平な採用担当者です。候補者を尊重しつつ、執拗に深掘りして事実と再現性を確認します。
-
-【話し方】
-- 口調は冷静・短文・丁寧。圧迫的にしすぎず、淡々と進める。
-- 返答は「復唱 + 確認 + 質問」の順で組み立てる。
-- 質問は必ず1つずつ。抽象的な回答には具体化を要求する。
-- 候補者の発言には必ず「なるほど」「承知しました」などの相槌を入れる。
-
-【評価の観点】
-- 具体性（事実・数値・期間・役割が明確か）
-- 一貫性（過去の発言と矛盾していないか）
-- 再現性（同様の成果を再現できる条件が説明できるか）
-- 因果（なぜそうしたか、何が変化したか）
-- 責任範囲（意思決定や担当範囲が明確か）
-- 失敗対応（失敗の原因・学び・再発防止が語れるか）
-
-【進行ルール】
-- 回答が抽象的なら、例・数字・具体エピソードが出るまで問い直す。
-- 「なぜ」「具体的に」「どうやって」を軸に、論点を深掘りする。
-- 1問につき最大3回まで深掘りし、その後は次の質問へ進む。
-- 思考プロセスと行動を分けて質問する。
-- 候補者の言葉を要約してから確認し、矛盾があれば静かに指摘する。
-
-【NG】
-- 人格否定や不適切な表現は禁止。
-- 誘導質問や決めつけは避ける。
-
-【最初の質問】
-「これまでのご経験の中で、最も成果が出た取り組みを1つ教えてください。具体的に、役割・期間・成果を含めてお願いします。」
-`;
+// 面接官のシステムプロンプトは lib/interview.ts の buildInterviewPrompt() で
+// 接続ごとに（シナリオ・難易度・プレミアム個別化に応じて）動的に生成する。
 
 const wss = new WebSocketServer({ port: PORT, host: "0.0.0.0" });
 
@@ -190,13 +168,19 @@ async function handleConnection(clientWs: WebSocket, request: IncomingMessage) {
 
   if (!session || session.closed || session.geminiWs.readyState === WebSocket.CLOSED) {
     if (session) cleanupSession(session, "stale");
+    const isPremium = plan === "premium";
+    const setup = await getInterviewSetup(userId, sessionId);
+    const systemPrompt = buildInterviewPrompt(setup, isPremium);
     session = createSession(
       sessionId,
       userId,
       context.deviceId,
       usedSeconds,
       dailyLimitSeconds,
-      dateKey
+      dateKey,
+      systemPrompt,
+      setup,
+      isPremium
     );
     sessions.set(sessionId, session);
   } else if (session.userId !== userId) {
@@ -240,7 +224,10 @@ function createSession(
   deviceId: string,
   usedSeconds: number,
   dailyLimitSeconds: number,
-  dateKey: string
+  dateKey: string,
+  systemPrompt: string,
+  setup: InterviewSetup | null,
+  isPremium: boolean
 ): Session {
   const geminiWs = new WebSocket(GEMINI_URL);
   const session: Session = {
@@ -258,6 +245,9 @@ function createSession(
     accumulatedMs: 0,
     dailyUsageSecondsAtStart: usedSeconds,
     dailyLimitSeconds,
+    systemPrompt,
+    setup,
+    isPremium,
     usageDateKey: dateKey,
     usageFinalized: false,
     lastClientInfo: null,
@@ -278,7 +268,7 @@ function createSession(
     geminiWs.send(
       JSON.stringify({
         clientContent: {
-          turns: [{ role: "user", parts: [{ text: systemPrompt }] }],
+          turns: [{ role: "user", parts: [{ text: session.systemPrompt }] }],
           turnComplete: true,
         },
       })
@@ -358,7 +348,8 @@ function handleClientMessage(session: Session, data: any) {
         session.disconnectTimer = null;
       }
       pauseUsageTimer(session);
-      generateScore(session.recordingBuffer).then((feedback) => {
+      const judgeContext = buildJudgeContext(session.setup, session.isPremium);
+      generateScore(session.recordingBuffer, judgeContext).then((feedback) => {
         if (feedback && session.clientWs?.readyState === WebSocket.OPEN) {
           session.clientWs.send(JSON.stringify({ type: "FEEDBACK_RESULT", data: feedback }));
         }
@@ -479,6 +470,34 @@ async function getUserPlan(userId: string): Promise<"free" | "premium"> {
   return data.plan === "premium" ? "premium" : "free";
 }
 
+/**
+ * このセッション用の面接設定を取得する（クライアントが接続前に保存している）。
+ * 見つからなければ null（＝デフォルトの一般面接）。
+ */
+async function getInterviewSetup(
+  userId: string,
+  sessionId: string
+): Promise<InterviewSetup | null> {
+  const { data, error } = await supabaseAdmin
+    .from("interview_setups")
+    .select("scenario, difficulty, company, role, focus, material")
+    .eq("user_id", userId)
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return {
+    scenario: data.scenario ?? "general",
+    difficulty: data.difficulty ?? "normal",
+    company: data.company ?? undefined,
+    role: data.role ?? undefined,
+    focus: data.focus ?? undefined,
+    material: data.material ?? undefined,
+  };
+}
+
 async function addDailyUsageSeconds(userId: string, dateKey: string, secondsToAdd: number) {
   if (secondsToAdd <= 0) return;
   const { data, error } = await supabaseAdmin
@@ -593,7 +612,7 @@ function cleanupSession(session: Session, reason: string) {
 }
 
 // --- 採点機能 (5段階評価を追加) ---
-async function generateScore(audioBuffer: Buffer[]) {
+async function generateScore(audioBuffer: Buffer[], judgeContext = "") {
   try {
     if (audioBuffer.length === 0) return null;
 
@@ -601,12 +620,16 @@ async function generateScore(audioBuffer: Buffer[]) {
     const wavBuffer = addWavHeader(fullAudio, 24000, 1, 16);
     const base64Audio = wavBuffer.toString("base64");
 
+    const contextLine = judgeContext
+      ? `\nこの面接の前提: ${judgeContext}\n「会社とのマッチ度(company_match)」は、この前提（応募先企業・職種）への適合度として評価してください。\n`
+      : "";
+
     // ★ここを変更: 5つの指標をJSONスキーマに追加
     const prompt = `
 あなたはベテラン面接官です。以下の音声は「模擬面接の録音データ」です。
 この候補者のパフォーマンスを評価し、以下のJSON形式で出力してください。
 **必ず日本語で出力すること。**
-
+${contextLine}
 {
   "score": 0〜100の整数,
   "metrics": {
