@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function ArticlesIndex() {
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-16">
+    <main className="min-h-screen px-6 py-16">
       <div className="mx-auto max-w-3xl">
         <Link href="/" className="text-sm font-bold text-slate-400 hover:text-emerald-600">
           ← TOPに戻る
