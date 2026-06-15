@@ -14,9 +14,36 @@ const displayFont = Shippori_Mincho_B1({
   variable: "--font-display",
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
 export const metadata: Metadata = {
-  title: "Interview App",
-  description: "Simple Interview App",
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: "Mensetsu Studio｜AI面接官と話す面接練習アプリ",
+    template: "%s｜Mensetsu Studio",
+  },
+  description:
+    "AI面接官が音声で深掘り質問し、5段階評価とレーダーチャートで採点。就活・転職の面接対策を、本番の緊張感のまま自宅で練習できます。1日15分まで無料。",
+  keywords: [
+    "面接練習",
+    "面接対策",
+    "AI面接",
+    "模擬面接",
+    "就活",
+    "転職",
+    "自己PR",
+    "ガクチカ",
+    "逆質問",
+  ],
+  openGraph: {
+    type: "website",
+    locale: "ja_JP",
+    siteName: "Mensetsu Studio",
+    title: "Mensetsu Studio｜AI面接官と話す面接練習アプリ",
+    description:
+      "AI面接官が音声で深掘り。5段階評価とレーダーチャートで弱点を可視化。1日15分まで無料。",
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({

@@ -36,8 +36,14 @@ export default async function Home() {
               <Link className="text-[var(--muted)] transition hover:text-[var(--ink)]" href="/interview">
                 面接を始める
               </Link>
+              <Link className="text-[var(--muted)] transition hover:text-[var(--ink)]" href="/articles">
+                面接対策コラム
+              </Link>
               <Link className="text-[var(--muted)] transition hover:text-[var(--ink)]" href="/mypage">
                 マイページ
+              </Link>
+              <Link className="font-semibold text-[var(--accent)] transition hover:opacity-80" href="/pricing">
+                料金プラン
               </Link>
             </nav>
             {user ? (

@@ -112,6 +112,8 @@ export default function InterviewPage() {
   const [feedback, setFeedback] = useState<FeedbackData | null>(null);
   const [saveStatus, setSaveStatus] = useState<"saving" | "saved" | "error" | null>(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  // 無料枠（1日の利用上限）に到達したらアップグレードを促す
+  const [limitReached, setLimitReached] = useState(false);
 
   // 10分タイマー
   const [timeLeftSec, setTimeLeftSec] = useState<number>(INTERVIEW_DURATION_SEC);
@@ -365,10 +367,19 @@ export default function InterviewPage() {
       ws.close();
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       isConnectingRef.current = false;
       clearTimer();
       setIsConnected(false);
+      // 1日の利用上限に達した場合は再接続せず、アップグレードを案内する
+      if (event.code === 1008 && (event.reason || "").includes("daily limit")) {
+        shouldReconnectRef.current = false;
+        resetReconnectState();
+        clearPendingChunks();
+        setLimitReached(true);
+        setStatus("本日の無料利用枠を使い切りました");
+        return;
+      }
       if (shouldReconnectRef.current && !isAnalyzingRef.current && !feedbackRef.current) {
         scheduleReconnect();
         return;
@@ -627,6 +638,36 @@ export default function InterviewPage() {
                 <button onClick={finishInterview} disabled={isAnalyzing} className={`w-full py-4 ${isAnalyzing ? "bg-slate-400" : "bg-red-500 hover:bg-red-600"} text-white rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center`}><PhoneOff className="w-5 h-5 mr-2" /> {isAnalyzing ? "採点中..." : "面接終了・採点"}</button>
             )}
         </div>
+
+        {/* 無料枠到達 → アップグレード導線（最も成約しやすい瞬間） */}
+        {limitReached && !feedback && (
+            <div className="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl p-8 text-center">
+                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
+                        <Volume2 className="h-7 w-7 text-emerald-600" />
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-800">本日の無料枠を使い切りました</h2>
+                    <p className="mt-2 text-sm text-slate-500">
+                        プレミアム（月¥980）なら1日120分まで練習できます。<br />
+                        本番までに、納得いくまで深掘り練習を。
+                    </p>
+                    <div className="mt-6 space-y-3">
+                        <Link
+                            href="/pricing"
+                            className="block w-full rounded-xl bg-emerald-500 py-3 font-bold text-white transition hover:bg-emerald-600"
+                        >
+                            プレミアムにアップグレード
+                        </Link>
+                        <button
+                            onClick={() => setLimitReached(false)}
+                            className="block w-full rounded-xl bg-slate-100 py-3 font-bold text-slate-600 transition hover:bg-slate-200"
+                        >
+                            また明日練習する
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
 
         {/* 結果表示モーダル */}
         {feedback && (

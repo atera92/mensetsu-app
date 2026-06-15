@@ -41,6 +41,8 @@ const MAX_SESSION_MS = Number(process.env.MAX_SESSION_MS) || 15 * 60 * 1000;
 const MAX_SESSIONS = Number(process.env.MAX_SESSIONS) || 20;
 const MAX_RECORDING_BYTES = Number(process.env.MAX_RECORDING_BYTES) || 32 * 1024 * 1024;
 const DAILY_LIMIT_SECONDS = Number(process.env.DAILY_LIMIT_SECONDS) || 15 * 60;
+const PREMIUM_DAILY_LIMIT_SECONDS =
+  Number(process.env.PREMIUM_DAILY_LIMIT_SECONDS) || 120 * 60;
 const AUDIO_WS_TOKEN = process.env.AUDIO_WS_TOKEN;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
   .split(",")
@@ -65,6 +67,7 @@ type Session = {
   activeSince: number | null;
   accumulatedMs: number;
   dailyUsageSecondsAtStart: number;
+  dailyLimitSeconds: number;
   usageDateKey: string;
   usageFinalized: boolean;
   lastClientInfo: { ip: string; origin: string; userAgent: string } | null;
@@ -158,10 +161,14 @@ async function handleConnection(clientWs: WebSocket, request: IncomingMessage) {
     return;
   }
 
+  const plan = await getUserPlan(userId);
+  const dailyLimitSeconds =
+    plan === "premium" ? PREMIUM_DAILY_LIMIT_SECONDS : DAILY_LIMIT_SECONDS;
+
   const dateKey = getDateKey();
   const usedSeconds = await getDailyUsageSeconds(userId, dateKey);
-  if (usedSeconds >= DAILY_LIMIT_SECONDS) {
-    console.warn(`🚫 Daily limit reached (user=${userId})`);
+  if (usedSeconds >= dailyLimitSeconds) {
+    console.warn(`🚫 Daily limit reached (user=${userId}, plan=${plan})`);
     clientWs.close(1008, "daily limit reached");
     return;
   }
@@ -183,7 +190,14 @@ async function handleConnection(clientWs: WebSocket, request: IncomingMessage) {
 
   if (!session || session.closed || session.geminiWs.readyState === WebSocket.CLOSED) {
     if (session) cleanupSession(session, "stale");
-    session = createSession(sessionId, userId, context.deviceId, usedSeconds, dateKey);
+    session = createSession(
+      sessionId,
+      userId,
+      context.deviceId,
+      usedSeconds,
+      dailyLimitSeconds,
+      dateKey
+    );
     sessions.set(sessionId, session);
   } else if (session.userId !== userId) {
     console.warn(`🚫 Session user mismatch (session=${sessionId})`);
@@ -225,6 +239,7 @@ function createSession(
   userId: string,
   deviceId: string,
   usedSeconds: number,
+  dailyLimitSeconds: number,
   dateKey: string
 ): Session {
   const geminiWs = new WebSocket(GEMINI_URL);
@@ -242,6 +257,7 @@ function createSession(
     activeSince: null,
     accumulatedMs: 0,
     dailyUsageSecondsAtStart: usedSeconds,
+    dailyLimitSeconds,
     usageDateKey: dateKey,
     usageFinalized: false,
     lastClientInfo: null,
@@ -434,9 +450,33 @@ async function getDailyUsageSeconds(userId: string, dateKey: string) {
 
   if (error) {
     console.error("daily_usage lookup error:", error.message);
-    return DAILY_LIMIT_SECONDS;
+    // 取得失敗時はプランに関わらず上限扱いにして安全側に倒す
+    return Number.MAX_SAFE_INTEGER;
   }
   return data?.seconds_used ?? 0;
+}
+
+/**
+ * subscriptions テーブルから現在の有効プランを判定する。
+ * status が active/trialing かつ期間内なら premium、それ以外は free。
+ * 失敗時は free（安全側）。
+ */
+async function getUserPlan(userId: string): Promise<"free" | "premium"> {
+  const { data, error } = await supabaseAdmin
+    .from("subscriptions")
+    .select("plan, status, current_period_end")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return "free";
+
+  const status = (data.status ?? "").toLowerCase();
+  if (status !== "active" && status !== "trialing") return "free";
+  if (data.current_period_end) {
+    const end = new Date(data.current_period_end).getTime();
+    if (Number.isFinite(end) && end < Date.now()) return "free";
+  }
+  return data.plan === "premium" ? "premium" : "free";
 }
 
 async function addDailyUsageSeconds(userId: string, dateKey: string, secondsToAdd: number) {
@@ -498,7 +538,7 @@ function pauseUsageTimer(session: Session) {
 
 function getRemainingSeconds(session: Session) {
   const usedSeconds = session.dailyUsageSecondsAtStart + Math.floor(session.accumulatedMs / 1000);
-  return DAILY_LIMIT_SECONDS - usedSeconds;
+  return session.dailyLimitSeconds - usedSeconds;
 }
 
 function scheduleDailyLimitTimer(session: Session, remainingSeconds: number) {
