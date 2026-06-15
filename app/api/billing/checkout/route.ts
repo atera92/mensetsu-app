@@ -21,8 +21,11 @@ export async function POST() {
 
   const priceId = process.env.STRIPE_PRICE_ID;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-  if (!priceId) {
-    return NextResponse.json({ error: "price not configured" }, { status: 500 });
+  if (!priceId || !process.env.STRIPE_SECRET_KEY) {
+    return NextResponse.json(
+      { error: "決済機能はただいま準備中です。公開までもう少しお待ちください。" },
+      { status: 503 }
+    );
   }
 
   const admin = createAdminClient();

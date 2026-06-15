@@ -26,8 +26,11 @@ export async function POST() {
     .eq("user_id", user.id)
     .maybeSingle();
 
-  if (!sub?.stripe_customer_id) {
-    return NextResponse.json({ error: "no customer" }, { status: 400 });
+  if (!sub?.stripe_customer_id || !process.env.STRIPE_SECRET_KEY) {
+    return NextResponse.json(
+      { error: "現在ご利用中のサブスクリプションが見つかりません。" },
+      { status: 400 }
+    );
   }
 
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
