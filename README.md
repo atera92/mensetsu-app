@@ -19,9 +19,31 @@
 - `NEXT_PUBLIC_WS_URL`（例: `wss://<audio-server-host>`）
 - `NEXT_PUBLIC_WS_TOKEN`（音声サーバーと同じ値）
 - `NEXT_PUBLIC_SITE_URL`（例: `https://<本番ドメイン>`。Checkout/ポータルのリダイレクト先）
+- `GEMINI_API_KEY`（会話モード面接 `/api/interview/*` が使用）
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `STRIPE_PRICE_ID`（Premium月額のPrice ID）
+
+## 面接モード
+
+- **会話モード（既定）**: 追加サーバー不要。`/api/interview/chat|finish` がGeminiを直接呼び、
+  ブラウザの音声認識(マイク入力)と読み上げで対話する。Vercelのみで完結。
+- **音声通話モード**: `NEXT_PUBLIC_WS_URL` を設定した場合のみ選択肢に表示。
+  `server.ts`（Gemini Liveのリアルタイム音声）をRender等で稼働させる必要がある。
+
+## Googleログインの有効化（Supabase側の設定）
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) で
+   OAuthクライアントID（Webアプリ）を作成
+   - 承認済みリダイレクトURI: `https://<プロジェクトref>.supabase.co/auth/v1/callback`
+2. Supabaseダッシュボード → Authentication → Providers → Google を有効化し、
+   クライアントIDとシークレットを貼り付け
+3. Authentication → URL Configuration で
+   - Site URL: `https://<本番ドメイン>`
+   - Redirect URLs: `https://<本番ドメイン>/auth/callback`（プレビュー用に `http://localhost:3000/auth/callback` も）
+   を設定
+
+※ 本アプリは1アカウント1端末制。別端末でのログインは拒否され、ログイン画面に理由が表示される。
 
 ### 音声サーバー（Render など）
 - `GEMINI_API_KEY`
