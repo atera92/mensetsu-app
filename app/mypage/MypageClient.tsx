@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Trophy, Calendar, Clock, Activity, X, Quote } from "lucide-react";
+import { ArrowLeft, Trophy, Calendar, Clock, Activity, X, Quote, TrendingUp } from "lucide-react";
 import { createClient } from "../../lib/supabase/client";
 
 // 型定義
@@ -81,6 +81,135 @@ const RadarChart = ({
       ))}
       <polygon points={points} fill="rgba(15, 155, 142, 0.28)" stroke="#0f9b8e" strokeWidth="2" />
     </svg>
+  );
+};
+
+// ===== 成長トラッキング（スコア推移 + 指標別平均） =====
+
+const METRIC_LABELS: { key: keyof InterviewRecord["metrics"]; label: string }[] = [
+  { key: "voice_volume", label: "声の大きさ" },
+  { key: "response_quality", label: "適切な応答" },
+  { key: "company_match", label: "マッチ度" },
+  { key: "episodes", label: "エピソード" },
+  { key: "clarity", label: "わかりやすさ" },
+];
+
+const BRAND = "#0f9b8e";
+
+/** スコア推移の折れ線（単一系列・ホバーで日付とスコアを表示） */
+const ScoreTrend = ({ records }: { records: InterviewRecord[] }) => {
+  const [hover, setHover] = useState<number | null>(null);
+  // 古い順に並べ替えて時系列にする
+  const points = [...records].reverse().map((r) => ({
+    date: new Date(r.created_at),
+    score: r.score ?? 0,
+  }));
+
+  const W = 600;
+  const H = 200;
+  const PAD = { top: 14, right: 16, bottom: 24, left: 34 };
+  const iw = W - PAD.left - PAD.right;
+  const ih = H - PAD.top - PAD.bottom;
+  const n = points.length;
+  const x = (i: number) => PAD.left + (n === 1 ? iw / 2 : (iw * i) / (n - 1));
+  const y = (s: number) => PAD.top + ih * (1 - s / 100);
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(p.score)}`).join(" ");
+
+  const onMove = (e: React.MouseEvent<SVGRectElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * iw + PAD.left;
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(x(i) - px);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    setHover(best);
+  };
+
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="スコアの推移">
+        {/* 控えめなグリッドと目盛り */}
+        {[0, 50, 100].map((v) => (
+          <g key={v}>
+            <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)} stroke="#eef1f5" strokeWidth="1" />
+            <text x={PAD.left - 8} y={y(v)} fontSize="10" textAnchor="end" dominantBaseline="middle" fill="#98a2b3">
+              {v}
+            </text>
+          </g>
+        ))}
+        {/* ホバー時のクロスヘア */}
+        {hover !== null && (
+          <line x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={H - PAD.bottom} stroke="#cdd3dd" strokeWidth="1" strokeDasharray="3 3" />
+        )}
+        <path d={path} fill="none" stroke={BRAND} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={x(i)}
+            cy={y(p.score)}
+            r={hover === i ? 5 : 4}
+            fill={hover === i ? BRAND : "#fff"}
+            stroke={BRAND}
+            strokeWidth="2"
+          />
+        ))}
+        {/* 最新値のみ直接ラベル */}
+        {n > 0 && hover === null && (
+          <text x={x(n - 1)} y={y(points[n - 1].score) - 10} fontSize="11" fontWeight="bold" textAnchor="middle" fill="#0b1020">
+            {points[n - 1].score}点
+          </text>
+        )}
+        <rect
+          x={PAD.left} y={0} width={iw} height={H}
+          fill="transparent"
+          onMouseMove={onMove}
+          onMouseLeave={() => setHover(null)}
+        />
+      </svg>
+      {hover !== null && (
+        <div
+          className="pointer-events-none absolute -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs shadow-md"
+          style={{ left: `${(x(hover) / W) * 100}%`, top: `${(y(points[hover].score) / H) * 100 - 22}%` }}
+        >
+          <span className="font-bold text-slate-800">{points[hover].score}点</span>
+          <span className="ml-2 text-slate-400">{points[hover].date.toLocaleDateString()}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** 指標別の平均（横棒・値ラベル付き・最弱指標に「要強化」表示） */
+const MetricAverages = ({ records }: { records: InterviewRecord[] }) => {
+  const avgs = METRIC_LABELS.map(({ key, label }) => {
+    const vals = records.map((r) => r.metrics?.[key] ?? 0).filter((v) => v > 0);
+    const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    return { label, avg };
+  });
+  const worst = avgs.reduce((m, a) => (a.avg < m.avg ? a : m), avgs[0]);
+
+  return (
+    <div className="space-y-3">
+      {avgs.map(({ label, avg }) => (
+        <div key={label} className="grid grid-cols-[92px_1fr_74px] items-center gap-3 text-sm">
+          <span className="text-slate-500">{label}</span>
+          <div className="h-2.5 rounded-full bg-slate-100">
+            <div
+              className="h-2.5 rounded-full"
+              style={{ width: `${(avg / 5) * 100}%`, backgroundColor: BRAND }}
+            />
+          </div>
+          <span className="text-right font-bold text-slate-700">
+            {avg.toFixed(1)}
+            {label === worst.label && avg > 0 && (
+              <span className="ml-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">要強化</span>
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 };
 
@@ -335,6 +464,27 @@ export default function MypageClient() {
             </span>
           </div>
         </div>
+
+        {/* 成長トラッキング */}
+        {!loading && records.length >= 2 && (
+          <div className="mb-10 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+              <h2 className="mb-4 flex items-center gap-2 text-sm font-bold text-slate-500">
+                <TrendingUp className="h-4 w-4" /> スコアの推移
+              </h2>
+              <ScoreTrend records={records} />
+            </div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+              <h2 className="mb-4 flex items-center gap-2 text-sm font-bold text-slate-500">
+                <Activity className="h-4 w-4" /> 指標別の平均（5点満点）
+              </h2>
+              <MetricAverages records={records} />
+              <p className="mt-4 text-xs leading-relaxed text-slate-400">
+                「要強化」の指標を面接設定の「特に練習したい点」に入れると、AI面接官が重点的に深掘りします。
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* 履歴リスト */}
         <div className="flex items-center justify-between mb-4">

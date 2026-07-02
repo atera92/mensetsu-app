@@ -81,7 +81,11 @@ export default function LoginPage() {
         </div>
 
         <p className="mt-6 text-center text-xs text-muted">
-          続行することで、利用規約とプライバシーポリシーに同意したものとみなされます。
+          続行することで、
+          <Link href="/terms" className="font-semibold text-brand-700 hover:underline">利用規約</Link>
+          と
+          <Link href="/privacy" className="font-semibold text-brand-700 hover:underline">プライバシーポリシー</Link>
+          に同意したものとみなされます。
         </p>
       </div>
     </main>
