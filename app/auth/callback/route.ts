@@ -80,6 +80,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // 失敗したらログイン画面へ
-  return NextResponse.redirect(`${origin}/login`);
+  // 失敗したらログイン画面へ（理由を表示できるようにパラメータを付ける）
+  return NextResponse.redirect(`${origin}/login?error=auth_failed`);
 }

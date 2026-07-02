@@ -14,9 +14,12 @@ import {
   type ScenarioKey,
   type DifficultyKey,
 } from "../../lib/interview";
+import ChatInterview from "../../components/ChatInterview";
 
 const SERVER_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 const WS_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN;
+// 音声通話モードは専用サーバー(NEXT_PUBLIC_WS_URL)が設定されている場合のみ提供
+const VOICE_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_WS_URL);
 
 // ★重要: ここで入出力のレートを明確に分けます
 const INPUT_SAMPLE_RATE = 16000;  // マイクは16k (AIが聞き取りやすい)
@@ -130,6 +133,10 @@ export default function InterviewPage() {
   const [focus, setFocus] = useState("");
   const [material, setMaterial] = useState("");
   const [setupError, setSetupError] = useState<string | null>(null);
+
+  // 面接モード：会話(サーバー不要・推奨) / 音声通話(専用サーバー)
+  const [mode, setMode] = useState<"chat" | "voice">("chat");
+  const [chatActive, setChatActive] = useState(false);
 
   // 10分タイマー
   const [timeLeftSec, setTimeLeftSec] = useState<number>(INTERVIEW_DURATION_SEC);
@@ -280,11 +287,34 @@ export default function InterviewPage() {
         // 設定保存に失敗しても面接自体は続行（デフォルト面接になる）
         console.error("interview_setups insert error:", error);
       }
-      await connect();
+      if (mode === "chat" || !VOICE_AVAILABLE) {
+        setChatActive(true);
+      } else {
+        await connect();
+      }
     } catch (e) {
       console.error(e);
       setSetupError("開始に失敗しました。もう一度お試しください。");
     }
+  };
+
+  // 会話モードの終了処理（フィードバック表示・保存は既存フローを再利用）
+  const handleChatFinish = (fb: FeedbackData) => {
+    setChatActive(false);
+    sessionIdRef.current = null;
+    setFeedback(fb);
+    saveToSupabase(fb);
+  };
+
+  const handleChatLimit = () => {
+    setChatActive(false);
+    sessionIdRef.current = null;
+    setLimitReached(true);
+  };
+
+  const handleChatExit = () => {
+    setChatActive(false);
+    sessionIdRef.current = null;
   };
 
   const saveToSupabase = async (data: FeedbackData) => {
@@ -687,6 +717,14 @@ export default function InterviewPage() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center relative py-8 px-4">
+        {chatActive && !feedback ? (
+          <ChatInterview
+            sessionId={sessionIdRef.current ?? ""}
+            onFinish={handleChatFinish}
+            onLimitReached={handleChatLimit}
+            onExit={handleChatExit}
+          />
+        ) : (
         <div className="bg-white p-8 rounded-3xl shadow-xl flex flex-col items-center max-w-lg w-full border border-slate-100 z-10">
             <Link href="/" className="self-start text-slate-400 hover:text-slate-600 mb-6 flex items-center text-sm font-bold"><ArrowLeft className="w-4 h-4 mr-1" /> TOPへ戻る</Link>
 
@@ -787,6 +825,35 @@ export default function InterviewPage() {
                   )}
                 </div>
 
+                {/* 面接モード選択 */}
+                {VOICE_AVAILABLE && (
+                  <div className="mt-5">
+                    <p className="mb-2 text-xs font-bold tracking-wide text-slate-400">面接モード</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMode("chat")}
+                        className={`rounded-xl border p-3 text-left transition ${
+                          mode === "chat" ? "border-brand bg-brand-50" : "border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <span className="block text-sm font-bold text-slate-800">会話モード</span>
+                        <span className="block text-[11px] leading-tight text-slate-400">音声入力＋読み上げ。安定動作</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMode("voice")}
+                        className={`rounded-xl border p-3 text-left transition ${
+                          mode === "voice" ? "border-brand bg-brand-50" : "border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <span className="block text-sm font-bold text-slate-800">音声通話モード</span>
+                        <span className="block text-[11px] leading-tight text-slate-400">リアルタイム音声対話</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {setupError && <p className="mt-3 text-center text-sm text-rose-500">{setupError}</p>}
 
                 <button
@@ -824,6 +891,7 @@ export default function InterviewPage() {
               </>
             )}
         </div>
+        )}
 
         {/* 無料枠到達 → アップグレード導線（最も成約しやすい瞬間） */}
         {limitReached && !feedback && (

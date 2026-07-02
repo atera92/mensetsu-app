@@ -1,12 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertCircle, ArrowLeft, ShieldCheck, Sparkles } from "lucide-react";
 import { createClient } from "../../lib/supabase/client";
+
+/** 認証コールバックから渡されるエラーコード → ユーザー向けメッセージ */
+const ERROR_MESSAGES: Record<string, string> = {
+  auth_failed: "ログインに失敗しました。もう一度お試しください。",
+  device_id_missing:
+    "端末情報を取得できませんでした。ブラウザのCookieを有効にして再度お試しください。",
+  single_device_only:
+    "このアカウントは別の端末で使用中です。ご利用は1アカウントにつき1端末までです。",
+  device_in_use:
+    "このアカウントは別の端末で使用中です。ご利用は1アカウントにつき1端末までです。",
+  device_lookup_failed: "ログイン処理に失敗しました。時間をおいて再度お試しください。",
+  user_missing: "ログイン処理に失敗しました。時間をおいて再度お試しください。",
+};
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // コールバックからのエラー理由を表示（useSearchParams不使用でSuspense不要にする）
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (code) {
+      setErrorMsg(ERROR_MESSAGES[code] ?? ERROR_MESSAGES.auth_failed);
+    }
+  }, []);
 
   const ensureDeviceId = () => {
     let deviceId = window.localStorage.getItem("device_id");
@@ -24,14 +46,22 @@ export default function LoginPage() {
 
   const onGoogleLogin = async () => {
     setLoading(true);
+    setErrorMsg(null);
     const supabase = createClient();
     ensureDeviceId();
-    await supabase.auth.signInWithOAuth({
+    const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo: `${window.location.origin}/auth/callback?next=/mypage`,
       },
     });
+    // 成功時はGoogleへリダイレクトされるため、ここに到達するのは失敗時のみ
+    if (error) {
+      setErrorMsg(
+        "Googleログインを開始できませんでした。時間をおいて再度お試しください。"
+      );
+      setLoading(false);
+    }
   };
 
   return (
@@ -60,6 +90,13 @@ export default function LoginPage() {
               面接練習の記録は、あなたのアカウントに安全に保存されます。
             </p>
           </div>
+
+          {errorMsg && (
+            <div className="mt-6 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
 
           <button
             onClick={onGoogleLogin}
