@@ -10,12 +10,17 @@ import {
   Target,
 } from "lucide-react";
 import { createClient } from "../lib/supabase/server";
+import { withTimeout } from "../lib/withTimeout";
 
 export default async function Home() {
   const supabase = createClient();
+  // 認証基盤が無応答でもトップページは必ず表示する（3秒で未ログイン扱い）
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await withTimeout(supabase.auth.getUser(), 3000, {
+    data: { user: null },
+    error: null,
+  } as Awaited<ReturnType<typeof supabase.auth.getUser>>);
 
   return (
     <main className="relative min-h-screen overflow-hidden">

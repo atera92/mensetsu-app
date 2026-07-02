@@ -4,17 +4,22 @@ import MypageClient from "./MypageClient";
 import { createClient } from "../../lib/supabase/server";
 import { getUserPlan } from "../../lib/subscription";
 import { PLAN_LABEL } from "../../lib/plan";
+import { withTimeout } from "../../lib/withTimeout";
 
 export const dynamic = "force-dynamic";
 
 async function PlanBanner() {
   const supabase = createClient();
+  // 認証基盤が無応答でもマイページを止めない
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await withTimeout(supabase.auth.getUser(), 3000, {
+    data: { user: null },
+    error: null,
+  } as Awaited<ReturnType<typeof supabase.auth.getUser>>);
   if (!user) return null;
 
-  const plan = await getUserPlan(supabase, user.id);
+  const plan = await withTimeout(getUserPlan(supabase, user.id), 3000, "free" as const);
   const isPremium = plan === "premium";
 
   return (

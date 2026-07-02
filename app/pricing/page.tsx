@@ -3,17 +3,24 @@ import { Check, ShieldCheck } from "lucide-react";
 import { createClient } from "../../lib/supabase/server";
 import { getUserPlan } from "../../lib/subscription";
 import { PREMIUM_PRICE_JPY } from "../../lib/plan";
+import { withTimeout } from "../../lib/withTimeout";
 import PricingActions from "./PricingActions";
 
 export const dynamic = "force-dynamic";
 
 export default async function PricingPage() {
   const supabase = createClient();
+  // 認証基盤が無応答でも料金ページは必ず表示する
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await withTimeout(supabase.auth.getUser(), 3000, {
+    data: { user: null },
+    error: null,
+  } as Awaited<ReturnType<typeof supabase.auth.getUser>>);
 
-  const plan = user ? await getUserPlan(supabase, user.id) : "free";
+  const plan = user
+    ? await withTimeout(getUserPlan(supabase, user.id), 3000, "free" as const)
+    : "free";
 
   const freeFeatures = [
     "1日15分まで面接練習",

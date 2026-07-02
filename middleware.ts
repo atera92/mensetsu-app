@@ -29,7 +29,15 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getUser();
+  // Supabaseが無応答でもサイト全体を止めない（最大3秒で打ち切り）
+  try {
+    await Promise.race([
+      supabase.auth.getUser(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  } catch {
+    // セッション更新の失敗は無視して描画を続行（各ページ側で未ログイン扱いになる）
+  }
 
   return response;
 }
