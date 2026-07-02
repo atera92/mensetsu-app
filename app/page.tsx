@@ -287,9 +287,12 @@ export default async function Home() {
 
         <footer className="mt-16 flex flex-wrap items-center justify-between gap-4 pb-4 text-xs text-muted">
           <span>© 2026 Mensetsu Studio</span>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <Link href="/articles" className="transition hover:text-ink">面接対策コラム</Link>
             <Link href="/pricing" className="transition hover:text-ink">料金プラン</Link>
+            <Link href="/terms" className="transition hover:text-ink">利用規約</Link>
+            <Link href="/privacy" className="transition hover:text-ink">プライバシー</Link>
+            <Link href="/legal" className="transition hover:text-ink">特定商取引法に基づく表記</Link>
           </div>
         </footer>
       </div>
