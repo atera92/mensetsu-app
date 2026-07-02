@@ -79,7 +79,7 @@ const RadarChart = ({
           strokeWidth="1"
         />
       ))}
-      <polygon points={points} fill="rgba(37, 99, 235, 0.3)" stroke="#2563eb" strokeWidth="2" />
+      <polygon points={points} fill="rgba(15, 155, 142, 0.28)" stroke="#0f9b8e" strokeWidth="2" />
     </svg>
   );
 };
@@ -210,12 +210,12 @@ export default function MypageClient() {
   // ✅ 別タブ詳細ページ（/mypage?view=detail&id=xxx）
   if (view === "detail") {
     return (
-      <div className="min-h-screen bg-slate-50 p-6 md:p-12">
+      <div className="min-h-screen p-6 md:p-12">
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center justify-between mb-8">
             <Link
               href="/mypage"
-              className="text-slate-500 hover:text-blue-600 flex items-center font-bold transition-colors"
+              className="text-slate-500 hover:text-brand-700 flex items-center font-bold transition-colors"
             >
               <ArrowLeft className="w-5 h-5 mr-1" /> マイページへ戻る
             </Link>
@@ -247,7 +247,7 @@ export default function MypageClient() {
                 <div className="flex flex-col md:flex-row gap-6 items-center">
                   <div className="flex flex-col items-center min-w-[140px]">
                     <p className="text-sm font-bold text-slate-400 tracking-widest">TOTAL SCORE</p>
-                    <p className="text-6xl font-black text-blue-600">
+                    <p className="text-6xl font-black text-brand-700">
                       {detail.score}
                       <span className="text-2xl text-slate-300 ml-1">/100</span>
                     </p>
@@ -292,11 +292,11 @@ export default function MypageClient() {
     records.length > 0 ? Math.round(records.reduce((acc, cur) => acc + (cur.score || 0), 0) / records.length) : 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 md:p-12">
+    <div className="min-h-screen p-6 md:p-12">
       <div className="max-w-4xl mx-auto">
         {/* ヘッダー */}
         <div className="flex items-center justify-between mb-8">
-          <Link href="/" className="text-slate-500 hover:text-blue-600 flex items-center font-bold transition-colors">
+          <Link href="/" className="text-slate-500 hover:text-brand-700 flex items-center font-bold transition-colors">
             <ArrowLeft className="w-5 h-5 mr-1" /> TOPに戻る
           </Link>
 
@@ -361,7 +361,7 @@ export default function MypageClient() {
                 >
                   {/* 左：スコアと日付 */}
                   <div className="flex flex-col items-center min-w-[100px]">
-                    <span className="text-3xl font-black text-blue-600">{record.score}</span>
+                    <span className="text-3xl font-black text-brand-700">{record.score}</span>
                     <span className="text-xs text-slate-400 mt-1 font-bold">SCORE</span>
                     <div className="mt-2 text-xs text-slate-400 flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-full">
                       <Clock className="w-3 h-3" />
@@ -420,7 +420,7 @@ export default function MypageClient() {
                     <div className="flex flex-col md:flex-row gap-6 items-center">
                       <div className="flex flex-col items-center min-w-[140px]">
                         <p className="text-sm font-bold text-slate-400 tracking-widest">TOTAL SCORE</p>
-                        <p className="text-6xl font-black text-blue-600">
+                        <p className="text-6xl font-black text-brand-700">
                           {selected.score}
                           <span className="text-2xl text-slate-300 ml-1">/100</span>
                         </p>

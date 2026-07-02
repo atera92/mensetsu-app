@@ -86,13 +86,13 @@ const RadarChart = ({ metrics }: { metrics: FeedbackData['metrics'] }) => {
             const y = center + radius * Math.sin(angleToRad(angle));
             return <line key={i} x1={center} y1={center} x2={x} y2={y} stroke="#e2e8f0" />;
         })}
-        <polygon points={points} fill="rgba(37, 99, 235, 0.3)" stroke="#2563eb" strokeWidth="2" />
+        <polygon points={points} fill="rgba(15, 155, 142, 0.28)" stroke="#0f9b8e" strokeWidth="2" />
         {dataValues.map((value, i) => {
             const angle = i * (360 / 5) - 90;
             const r = (radius / 5) * value;
             const x = center + r * Math.cos(angleToRad(angle));
             const y = center + r * Math.sin(angleToRad(angle));
-            return <circle key={i} cx={x} cy={y} r="4" fill="#2563eb" />;
+            return <circle key={i} cx={x} cy={y} r="4" fill="#0f9b8e" />;
         })}
         {labels.map((label, i) => {
             const { x, y } = getLabelPos(i);
